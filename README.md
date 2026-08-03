@@ -5,6 +5,33 @@ Stream your local anime collection through a polished web interface, sync with y
 
 ---
 
+## 📸 Screenshots
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="screenshots/homepage.png" alt="Homepage" />
+      <p align="center"><b>Homepage - Continue Watching & Airing Schedule</b></p>
+    </td>
+    <td width="50%">
+      <img src="screenshots/local-library.png" alt="Local Library" />
+      <p align="center"><b>Local Library - Browse Your Collection</b></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img src="screenshots/anilist-library.png" alt="AniList Library" />
+      <p align="center"><b>AniList Library - Sync Your Watching List</b></p>
+    </td>
+    <td width="50%">
+      <img src="screenshots/settings.png" alt="Settings & Notifications" />
+      <p align="center"><b>Notifications & Settings</b></p>
+    </td>
+  </tr>
+</table>
+
+---
+
 ## Features
 
 - **Local Streaming** - Stream `.mp4`, `.mkv`, `.webm`, `.avi`, `.mov` files directly from your hard drive via HTTP Range requests
