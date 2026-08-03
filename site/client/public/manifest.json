@@ -1,0 +1,17 @@
+{
+  "name": "AniStash Play",
+  "short_name": "AniStash",
+  "description": "Self-Hosted Anime Library",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b1622",
+  "theme_color": "#2c90de",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+node_modules
+dist
+*.log
+.DS_Store
+
+# Placeholder PNG files - generate from favicon.svg if needed
+# Or just use the SVG favicon which works everywhere
+public/logo-192.png
+public/logo-512.png

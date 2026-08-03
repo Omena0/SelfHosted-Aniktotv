@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-size: 18px;
+  }
+  body {
+    background-color: #0b1622;
+    color: #a0b1c5;
+    font-family: 'Nunito', 'Archivo', sans-serif;
+    overflow-x: hidden;
+  }
+}
+
+/* Fixed Modal Backdrop Overlay */
+.modal-backdrop {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  margin: 0 !important;
+  padding: 1rem !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  z-index: 9999 !important;
+}
+
+/* Custom scrollbars matching Anikoto */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0b1622;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #20334d;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #209cee;
+}
+
+/* Outline rank numbers style (e.g. 1, 2, 3 in Top Anime sidebar) */
+.rank-number {
+  font-family: 'Archivo', sans-serif;
+  font-weight: 800;
+  font-size: 2.5rem;
+  line-height: 1;
+  color: transparent;
+  -webkit-text-stroke: 1.5px #209cee;
+  text-shadow: 0 0 10px rgba(32, 156, 238, 0.2);
+}
+
+.rank-number-top {
+  -webkit-text-stroke: 2px #209cee;
+  color: rgba(32, 156, 238, 0.15);
+}
+
+/* Custom GPU hardware accelerated utilities */
+.gpu-trans {
+  will-change: transform, opacity;
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s ease, background-color 0.2s ease, border-color 0.2s ease;
+}

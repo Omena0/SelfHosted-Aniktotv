@@ -1,0 +1,5 @@
+# AniStash database and cache
+.anistash/
+
+# Keep the folder structure
+!.gitkeep

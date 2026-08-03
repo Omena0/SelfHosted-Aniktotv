@@ -1,0 +1,8 @@
+{
+  "anilistUsername": "astralquarks",
+  "anilistClientId": "",
+  "anilistClientSecret": "",
+  "port": 4321,
+  "libraryPath": "./anime",
+  "requireOAuth": false
+}
