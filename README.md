@@ -3,9 +3,10 @@
 A self-hosted, privacy-first anime media server that runs entirely on your own machine.
 Stream your local anime collection through a polished web interface, sync with your AniList account, import external subtitles, and track your watch progress. No cloud, no accounts required to get started.
 
+> Inspired UI From- aniktotv
 ---
 
-## 📸 Screenshots
+## Screenshots
 
 <table>
   <tr>
@@ -24,8 +25,8 @@ Stream your local anime collection through a polished web interface, sync with y
       <p align="center"><b>AniList Library - Sync Your Watching List</b></p>
     </td>
     <td width="50%">
-      <img src="screenshots/settings.png" alt="Settings & Notifications" />
-      <p align="center"><b>Notifications & Settings</b></p>
+      <img src="screenshots/notifications.png" alt="PLayer & Notifications" />
+      <p align="center"><b>Notifications & Player</b></p>
     </td>
   </tr>
 </table>
@@ -81,13 +82,17 @@ If you prefer to install manually:
 
 ```bash
 # Install server dependencies
-npm install --prefix site/server
+cd site/server
+npm install
+cd ../..
 
 # Install client dependencies
-npm install --prefix site/client
+cd site/client
+npm install
 
 # Build the client
-npm run build --prefix site/client
+npm run build
+cd ../..
 ```
 
 ### 4. Configure the Application
@@ -182,7 +187,7 @@ Part 1/
 ### 8. Start the Server
 
 ```bash
-npm start
+node site/server/index.js
 ```
 
 Then open your browser and go to:
