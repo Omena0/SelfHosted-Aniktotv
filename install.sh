@@ -15,9 +15,15 @@ fi
 
 echo "[1/3] Installing dependencies..."
 echo ""
-npm install
+npm install --prefix site/server
 if [ $? -ne 0 ]; then
-    echo "[ERROR] Failed to install dependencies"
+    echo "[ERROR] Failed to install server dependencies"
+    exit 1
+fi
+
+npm install --prefix site/client
+if [ $? -ne 0 ]; then
+    echo "[ERROR] Failed to install client dependencies"
     exit 1
 fi
 

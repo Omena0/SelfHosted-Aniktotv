@@ -80,10 +80,14 @@ This will automatically:
 If you prefer to install manually:
 
 ```bash
-npm install
-cd site/client
-npm run build
-cd ../..
+# Install server dependencies
+npm install --prefix site/server
+
+# Install client dependencies
+npm install --prefix site/client
+
+# Build the client
+npm run build --prefix site/client
 ```
 
 ### 4. Configure the Application

@@ -16,9 +16,16 @@ if %ERRORLEVEL% NEQ 0 (
 
 echo [1/3] Installing dependencies...
 echo.
-call npm install
+call npm install --prefix site\server
 if %ERRORLEVEL% NEQ 0 (
-    echo [ERROR] Failed to install dependencies
+    echo [ERROR] Failed to install server dependencies
+    pause
+    exit /b 1
+)
+
+call npm install --prefix site\client
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] Failed to install client dependencies
     pause
     exit /b 1
 )
