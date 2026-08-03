@@ -13,7 +13,7 @@ export const Navbar: React.FC = () => {
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [unreadNotifCount, setUnreadNotifCount] = useState(0);
   const [hasUrgentNotif, setHasUrgentNotif] = useState(false);
-  const [currentUsername, setCurrentUsername] = useState('astralquarks');
+  const [currentUsername, setCurrentUsername] = useState('');
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -71,11 +71,11 @@ export const Navbar: React.FC = () => {
     <header className="bg-[#0b1622] border-b border-[#1a2a3e] sticky top-0 z-50">
       <div className="max-w-[1450px] mx-auto px-3 sm:px-5 h-16 flex items-center justify-between gap-4">
         {/* Left Side: Hamburger, Logo, Search, Nav links */}
-        <div className="flex items-center gap-4 flex-1">
+        <div className="flex items-center gap-4 flex-1 min-w-0">
           {/* Menu icon (Toggles Hamburger Dropdown) */}
           <button
             onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-            className={`p-1.5 rounded-md transition-colors ${
+            className={`p-1.5 rounded-md transition-colors flex-shrink-0 ${
               isMobileMenuOpen ? 'bg-[#209cee] text-white' : 'text-slate-300 hover:text-white hover:bg-[#142030]'
             }`}
             title="Toggle Navigation Menu"
@@ -84,7 +84,7 @@ export const Navbar: React.FC = () => {
           </button>
 
           {/* Logo matching an!koto style */}
-          <Link to="/" className="flex items-center gap-1 group text-2xl font-black tracking-tight font-archivo">
+          <Link to="/" className="flex items-center gap-1 group text-2xl font-black tracking-tight font-archivo flex-shrink-0">
             <span className="text-white">an</span>
             <span className="text-[#209cee]">!</span>
             <span className="text-white">stash</span>
@@ -94,7 +94,7 @@ export const Navbar: React.FC = () => {
           </Link>
 
           {/* Search Box */}
-          <form onSubmit={handleSearchSubmit} className="hidden md:flex relative max-w-sm w-full ml-2">
+          <form onSubmit={handleSearchSubmit} className="hidden md:flex relative max-w-xs lg:max-w-sm w-full ml-2">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
             <input
               type="text"
@@ -105,7 +105,7 @@ export const Navbar: React.FC = () => {
             />
           </form>
 
-          {/* Nav Items: Local Library, AniList Library, Random */}
+          {/* Nav Items: Local Library, AniList Library, Random - Hidden on mobile/tablet, visible on large desktop */}
           <div className="hidden lg:flex items-center gap-2 text-xs font-bold ml-2">
             <Link
               to="/library"
@@ -143,7 +143,7 @@ export const Navbar: React.FC = () => {
         </div>
 
         {/* Right Side: Rescan, Bell, Avatar */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-shrink-0">
           <button
             onClick={handleRescan}
             disabled={isRescanning}
@@ -158,7 +158,7 @@ export const Navbar: React.FC = () => {
             <button
               onClick={() => setIsNotifOpen(!isNotifOpen)}
               title="Schedule Notifications"
-              className="relative p-1.5 rounded-md bg-[#142030] border border-[#1a2a3e] text-slate-300 hover:text-white transition-colors"
+              className="relative p-1.5 rounded-md bg-[#142030] border border-[#1a2a3e] text-slate-300 hover:text-white transition-colors flex-shrink-0"
             >
               <Bell className="w-4 h-4" />
               {unreadNotifCount > 0 && (
@@ -282,6 +282,17 @@ export const Navbar: React.FC = () => {
                   Dropped
                 </Link>
               </div>
+            </div>
+            
+            {/* Random Button Section - Full Width */}
+            <div className="col-span-1 md:col-span-2">
+              <button
+                onClick={handleRandomClick}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-[#142030] border border-[#209cee]/30 text-[#209cee] hover:text-white hover:bg-[#209cee]/10 text-sm font-bold transition-colors"
+              >
+                <Dices className="w-4 h-4" />
+                Play Random Anime
+              </button>
             </div>
           </div>
         </div>

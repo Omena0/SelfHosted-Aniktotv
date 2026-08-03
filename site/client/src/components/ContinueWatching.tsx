@@ -47,24 +47,25 @@ export const ContinueWatching: React.FC = () => {
   }
 
   return (
-    <section className="space-y-3">
+    <section className="space-y-2 sm:space-y-3">
       {/* Header matching Anikoto */}
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-bold tracking-tight text-white flex items-center gap-2 font-archivo">
-          <History className="w-5 h-5 text-[#209cee]" />
+        <h2 className="text-base sm:text-lg font-bold tracking-tight text-white flex items-center gap-1.5 sm:gap-2 font-archivo">
+          <History className="w-4 h-4 sm:w-5 sm:h-5 text-[#209cee]" />
           Continue Watching
         </h2>
         <Link
           to="/library"
-          className="px-3 py-1 rounded bg-[#1c2d44] hover:bg-[#20334d] text-slate-300 hover:text-white text-xs font-semibold flex items-center gap-1 gpu-trans"
+          className="px-2 sm:px-3 py-1 rounded bg-[#1c2d44] hover:bg-[#20334d] text-slate-300 hover:text-white text-[10px] sm:text-xs font-semibold flex items-center gap-0.5 sm:gap-1 gpu-trans"
         >
-          View more
-          <ChevronRight className="w-3.5 h-3.5" />
+          <span className="hidden xs:inline">View more</span>
+          <span className="xs:hidden">More</span>
+          <ChevronRight className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
         </Link>
       </div>
 
       {/* Horizontal Scroll Row */}
-      <div className="flex gap-3.5 overflow-x-auto pb-2 scrollbar-thin">
+      <div className="flex gap-2 sm:gap-3.5 overflow-x-auto pb-2 scrollbar-thin -mx-4 px-4 sm:mx-0 sm:px-0">
         {items.map((item) => {
           const anime = library[item.slug];
           const progressPercent = (item.positionSeconds / item.durationSeconds) * 100;
@@ -79,7 +80,7 @@ export const ContinueWatching: React.FC = () => {
               to={`/watch/${item.slug}/${encodeURIComponent(item.season)}/${encodeURIComponent(
                 item.episodeFile
               )}`}
-              className="group flex-shrink-0 w-40 sm:w-44 space-y-2 gpu-trans"
+              className="group flex-shrink-0 w-32 xs:w-40 sm:w-44 space-y-1.5 sm:space-y-2 gpu-trans"
             >
               {/* Poster Card */}
               <div className="relative aspect-[2/3] rounded-lg bg-[#142030] border border-white/[0.04] overflow-hidden group-hover:border-[#209cee] gpu-trans">
@@ -105,11 +106,11 @@ export const ContinueWatching: React.FC = () => {
                 </div>
 
                 {/* Bottom Overlay Badges */}
-                <div className="absolute bottom-1 left-1 right-1 flex items-center justify-between text-[10px] font-bold z-10">
-                  <span className="px-1.5 py-0.5 rounded bg-[#209cee] text-white shadow">
+                <div className="absolute bottom-1 left-1 right-1 flex items-center justify-between text-[9px] sm:text-[10px] font-bold z-10">
+                  <span className="px-1 xs:px-1.5 py-0.5 rounded bg-[#209cee] text-white shadow">
                     {epLabel}
                   </span>
-                  <span className="px-1.5 py-0.5 rounded bg-black/75 text-slate-200 backdrop-blur-none font-mono">
+                  <span className="px-1 xs:px-1.5 py-0.5 rounded bg-black/75 text-slate-200 backdrop-blur-none font-mono">
                     {formatSeconds(item.positionSeconds)} / {formatSeconds(item.durationSeconds)}
                   </span>
                 </div>
@@ -124,7 +125,7 @@ export const ContinueWatching: React.FC = () => {
               </div>
 
               {/* Title below card */}
-              <h3 className="text-xs font-semibold text-slate-200 group-hover:text-[#209cee] line-clamp-1 gpu-trans">
+              <h3 className="text-[11px] xs:text-xs font-semibold text-slate-200 group-hover:text-[#209cee] line-clamp-1 gpu-trans leading-tight">
                 {anime?.title.english || anime?.title.romaji || item.slug}
               </h3>
             </Link>

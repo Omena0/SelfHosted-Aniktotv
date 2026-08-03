@@ -34,7 +34,24 @@ if [ ! -d "site/client/dist" ]; then
     cd ../..
 fi
 
-# Start the server
+# Get local IP address
+LOCAL_IP=$(hostname -I | awk '{print $1}')
+if [ -z "$LOCAL_IP" ]; then
+    LOCAL_IP=$(ifconfig | grep "inet " | grep -v 127.0.0.1 | awk '{print $2}' | head -n 1)
+fi
+
 echo "🚀 Starting AniStash Play server..."
 echo ""
+echo "========================================"
+echo "  Access URLs:"
+echo "========================================"
+echo "  Local:    http://localhost:4321"
+echo "  Network:  http://$LOCAL_IP:4321"
+echo ""
+echo "  💡 You can open this on your phone too!"
+echo "     Just use the Network URL above."
+echo "========================================"
+echo ""
+
+# Start the server
 node site/server/index.js

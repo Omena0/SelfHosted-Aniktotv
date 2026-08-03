@@ -113,27 +113,28 @@ export const Player: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3 sm:space-y-4 lg:space-y-6">
       {/* Top Breadcrumb Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-surface-border pb-4">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-col xs:flex-row xs:items-center justify-between gap-2 sm:gap-4 border-b border-surface-border pb-3 sm:pb-4">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           <Link
             to={slug ? `/anime/${slug}` : '/library'}
-            className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-400 hover:text-white gpu-trans"
+            className="inline-flex items-center gap-1 sm:gap-1.5 text-xs sm:text-sm font-medium text-slate-400 hover:text-white gpu-trans flex-shrink-0"
           >
-            <ChevronLeft className="w-4 h-4" />
-            Back to Title
+            <ChevronLeft className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+            <span className="hidden xs:inline">Back to Title</span>
+            <span className="xs:hidden">Back</span>
           </Link>
-          <span className="text-slate-600">/</span>
-          <span className="text-sm font-bold text-white capitalize">
+          <span className="text-slate-600 hidden xs:inline">/</span>
+          <span className="text-xs sm:text-sm font-bold text-white capitalize truncate">
             {anime?.title.english || anime?.title.romaji || slug?.replace(/-/g, ' ')}
           </span>
         </div>
 
-        <div className="flex items-center gap-2 text-xs font-mono text-slate-400 bg-surface-card px-3 py-1 rounded-md border border-surface-border">
-          <span>{season}</span>
+        <div className="flex items-center gap-1.5 sm:gap-2 text-[10px] sm:text-xs font-mono text-slate-400 bg-surface-card px-2 sm:px-3 py-1 rounded-md border border-surface-border overflow-x-auto scrollbar-none">
+          <span className="whitespace-nowrap">{season}</span>
           <span>•</span>
-          <span className="text-brand-400 font-semibold">{file}</span>
+          <span className="text-brand-400 font-semibold truncate">{file}</span>
         </div>
       </div>
 
@@ -143,9 +144,9 @@ export const Player: React.FC = () => {
         </div>
       ) : (
         /* Player & Sidebar Layout */
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 sm:gap-6">
           {/* Main Player Column (3 Cols) */}
-          <div className="lg:col-span-3 space-y-4">
+          <div className="lg:col-span-3 space-y-3 sm:space-y-4">
             {/* Video Player Container */}
             <div className="rounded-2xl bg-black border-none outline-none overflow-hidden shadow-2xl relative aspect-video flex items-center justify-center">
               {streamUrl ? (
@@ -171,56 +172,58 @@ export const Player: React.FC = () => {
             </div>
 
             {/* Video Controls & Navigation Bar */}
-            <div className="p-4 rounded-xl bg-[#142030]/60 border border-[#142030] flex flex-wrap items-center justify-between gap-4">
-              <div>
-                <h1 className="text-base font-bold text-white">
+            <div className="p-3 sm:p-4 rounded-lg sm:rounded-xl bg-[#142030]/60 border border-[#142030] flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
+              <div className="min-w-0">
+                <h1 className="text-sm sm:text-base font-bold text-white truncate">
                   {file?.replace(/\.\w+$/, '')}
                 </h1>
-                <p className="text-xs text-slate-400 mt-0.5">
+                <p className="text-[10px] sm:text-xs text-slate-400 mt-0.5 truncate">
                   {anime?.title.romaji} — {season}
                 </p>
               </div>
 
               {/* Prev / Next Episode Controls */}
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
                 <button
                   disabled={!prevEpisode}
                   onClick={() => prevEpisode && navigateToEpisode(prevEpisode.file)}
-                  className="px-3.5 py-2 rounded-lg bg-[#0e1726] border border-[#142030] text-slate-300 hover:text-white hover:border-[#209cee]/40 text-xs font-medium flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed gpu-trans"
+                  className="px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-lg bg-[#0e1726] border border-[#142030] text-slate-300 hover:text-white hover:border-[#209cee]/40 text-[10px] sm:text-xs font-medium flex items-center gap-1 sm:gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed gpu-trans"
                 >
-                  <SkipBack className="w-3.5 h-3.5" />
-                  Previous
+                  <SkipBack className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                  <span className="hidden xs:inline">Previous</span>
+                  <span className="xs:hidden">Prev</span>
                 </button>
 
                 <button
                   disabled={!nextEpisode}
                   onClick={() => nextEpisode && navigateToEpisode(nextEpisode.file)}
-                  className="px-3.5 py-2 rounded-lg bg-[#209cee] hover:bg-[#1b86ce] text-white text-xs font-semibold flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed gpu-trans shadow-md"
+                  className="px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-lg bg-[#209cee] hover:bg-[#1b86ce] text-white text-[10px] sm:text-xs font-semibold flex items-center gap-1 sm:gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed gpu-trans shadow-md"
                 >
-                  Next Episode
-                  <SkipForward className="w-3.5 h-3.5" />
+                  <span className="hidden xs:inline">Next Episode</span>
+                  <span className="xs:hidden">Next</span>
+                  <SkipForward className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
                 </button>
               </div>
             </div>
           </div>
 
           {/* Season Episodes Sidebar (1 Col) */}
-          <div className="lg:col-span-1 rounded-xl bg-[#142030]/60 border border-[#142030] p-4 space-y-4 flex flex-col max-h-[600px]">
-            <div className="flex items-center justify-between border-b border-[#142030] pb-3">
-              <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                <List className="w-4 h-4 text-[#209cee]" />
+          <div className="lg:col-span-1 rounded-lg sm:rounded-xl bg-[#142030]/60 border border-[#142030] p-3 sm:p-4 space-y-3 sm:space-y-4 flex flex-col max-h-[500px] sm:max-h-[600px]">
+            <div className="flex items-center justify-between border-b border-[#142030] pb-2 sm:pb-3">
+              <h3 className="text-xs sm:text-sm font-bold text-white flex items-center gap-1.5 sm:gap-2">
+                <List className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#209cee]" />
                 {season}
               </h3>
-              <span className="text-xs text-slate-400">
-                {episodes.length} Episode{episodes.length !== 1 ? 's' : ''}
+              <span className="text-[10px] sm:text-xs text-slate-400">
+                {episodes.length} Ep{episodes.length !== 1 ? 's' : ''}
               </span>
             </div>
 
             {/* Sidebar Episode List */}
-            <div className="flex-1 overflow-y-auto pr-1 space-y-2 scrollbar-thin">
+            <div className="flex-1 overflow-y-auto pr-1 space-y-1.5 sm:space-y-2 scrollbar-thin">
               {loading ? (
                 [1, 2, 3, 4, 5].map((i) => (
-                  <div key={i} className="h-12 rounded-lg bg-[#0e1726] animate-pulse" />
+                  <div key={i} className="h-10 sm:h-12 rounded-lg bg-[#0e1726] animate-pulse" />
                 ))
               ) : episodes.length > 0 ? (
                 episodes.map((ep, idx) => {
@@ -231,7 +234,7 @@ export const Player: React.FC = () => {
                     <button
                       key={ep.file}
                       onClick={() => navigateToEpisode(ep.file)}
-                      className={`w-full text-left p-3 rounded-lg border text-xs flex items-center justify-between gap-2 gpu-trans ${
+                      className={`w-full text-left p-2 sm:p-3 rounded-lg border text-[10px] sm:text-xs flex items-center justify-between gap-2 gpu-trans ${
                         isCurrent
                           ? 'bg-[#209cee]/20 border-[#209cee]/50 text-white font-semibold'
                           : epCompleted
@@ -239,9 +242,9 @@ export const Player: React.FC = () => {
                           : 'bg-[#0e1726] border-[#142030] text-slate-300 hover:border-[#209cee]/30 hover:text-white'
                       }`}
                     >
-                      <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
                         <span
-                          className={`w-5 h-5 rounded text-[10px] flex items-center justify-center font-bold flex-shrink-0 ${
+                          className={`w-4 h-4 sm:w-5 sm:h-5 rounded text-[9px] sm:text-[10px] flex items-center justify-center font-bold flex-shrink-0 ${
                             isCurrent
                               ? 'bg-brand-500 text-white'
                               : 'bg-surface-card text-slate-400'
@@ -255,15 +258,15 @@ export const Player: React.FC = () => {
                       </div>
 
                       {isCurrent ? (
-                        <Play className="w-3.5 h-3.5 text-brand-400 fill-current flex-shrink-0" />
+                        <Play className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-brand-400 fill-current flex-shrink-0" />
                       ) : epCompleted ? (
-                        <CheckCircle2 className="w-3.5 h-3.5 text-green-400 flex-shrink-0" />
+                        <CheckCircle2 className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-green-400 flex-shrink-0" />
                       ) : null}
                     </button>
                   );
                 })
               ) : (
-                <div className="text-center py-6 text-slate-500 text-xs">
+                <div className="text-center py-6 text-slate-500 text-[10px] sm:text-xs">
                   No episodes found.
                 </div>
               )}

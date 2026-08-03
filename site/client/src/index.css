@@ -4,13 +4,24 @@
 
 @layer base {
   html {
-    font-size: 18px;
+    font-size: 16px;
   }
+  
+  @media (min-width: 768px) {
+    html {
+      font-size: 18px;
+    }
+  }
+  
   body {
     background-color: #0b1622;
     color: #a0b1c5;
     font-family: 'Nunito', 'Archivo', sans-serif;
     overflow-x: hidden;
+  }
+  
+  * {
+    box-sizing: border-box;
   }
 }
 
@@ -30,8 +41,15 @@
 
 /* Custom scrollbars matching Anikoto */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 4px;
+  height: 4px;
+}
+
+@media (min-width: 640px) {
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
 }
 
 ::-webkit-scrollbar-track {
@@ -47,15 +65,35 @@
   background: #209cee;
 }
 
+/* Mobile touch improvements */
+@media (max-width: 640px) {
+  * {
+    -webkit-tap-highlight-color: rgba(32, 156, 238, 0.1);
+  }
+  
+  /* Improve scrolling on mobile */
+  .overflow-x-auto {
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+  }
+}
+
 /* Outline rank numbers style (e.g. 1, 2, 3 in Top Anime sidebar) */
 .rank-number {
   font-family: 'Archivo', sans-serif;
   font-weight: 800;
-  font-size: 2.5rem;
+  font-size: 2rem;
   line-height: 1;
   color: transparent;
-  -webkit-text-stroke: 1.5px #209cee;
+  -webkit-text-stroke: 1.2px #209cee;
   text-shadow: 0 0 10px rgba(32, 156, 238, 0.2);
+}
+
+@media (min-width: 640px) {
+  .rank-number {
+    font-size: 2.5rem;
+    -webkit-text-stroke: 1.5px #209cee;
+  }
 }
 
 .rank-number-top {

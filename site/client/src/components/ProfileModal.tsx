@@ -136,7 +136,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onC
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="e.g. astralquarks"
+                placeholder="Enter AniList username"
                 className="w-full bg-[#142030] border border-[#1a2a3e] rounded-lg px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#209cee] transition-all font-semibold"
               />
               <p className="text-[11px] text-slate-400 leading-tight">

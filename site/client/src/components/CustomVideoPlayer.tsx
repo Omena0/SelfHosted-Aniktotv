@@ -256,22 +256,60 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
     }
   };
 
-  // Double Click Gesture: Toggle / Exit Fullscreen (No other accidental gestures)
-  const handleDoubleClick = (e: React.MouseEvent) => {
+  // Double Click Gesture: Toggle / Exit Fullscreen
+  const handleDoubleClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!containerRef.current) return;
 
     if (document.fullscreenElement) {
-      document.exitFullscreen().catch(() => {});
+      // Exit fullscreen
+      await document.exitFullscreen().catch(() => {});
+      // Unlock screen orientation when exiting fullscreen
+      if (screen.orientation) {
+        try {
+          (screen.orientation as any).unlock();
+        } catch (err) {
+          console.warn('Screen orientation unlock failed:', err);
+        }
+      }
     } else {
-      containerRef.current.requestFullscreen().catch(() => {});
+      // Enter fullscreen
+      await containerRef.current.requestFullscreen().catch(() => {});
+      // Lock to landscape when entering fullscreen on mobile
+      if (screen.orientation) {
+        try {
+          await (screen.orientation as any).lock('landscape').catch(() => {});
+        } catch (err) {
+          console.warn('Screen orientation lock failed:', err);
+        }
+      }
     }
   };
 
-  // Fullscreen change listener
+  // Fullscreen change listener with auto-rotate
   useEffect(() => {
-    const handleFsChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
+    const handleFsChange = async () => {
+      const isNowFullscreen = !!document.fullscreenElement;
+      setIsFullscreen(isNowFullscreen);
+      
+      // Handle screen orientation on fullscreen changes
+      if (screen.orientation) {
+        if (isNowFullscreen) {
+          // Lock to landscape when entering fullscreen
+          try {
+            await (screen.orientation as any).lock('landscape').catch(() => {});
+          } catch (err) {
+            console.warn('Screen orientation lock failed:', err);
+          }
+        } else {
+          // Unlock orientation when exiting fullscreen
+          try {
+            (screen.orientation as any).unlock();
+          } catch (err) {
+            console.warn('Screen orientation unlock failed:', err);
+          }
+        }
+      }
     };
     document.addEventListener('fullscreenchange', handleFsChange);
     return () => document.removeEventListener('fullscreenchange', handleFsChange);
@@ -380,6 +418,10 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
       ref={containerRef}
       onMouseMove={handleMouseMove}
       onMouseLeave={() => isPlaying && setControlsVisible(false)}
+      onClick={() => {
+        // Single click anywhere to toggle controls visibility (will be stopped by controls bar)
+        setControlsVisible(!controlsVisible);
+      }}
       onDoubleClick={handleDoubleClick}
       className={`relative group bg-black overflow-hidden select-none font-sans flex items-center justify-center ${
         isFullscreen ? 'w-screen h-screen fixed inset-0 z-50' : 'w-full aspect-video rounded-2xl border-none outline-none shadow-2xl'
@@ -401,7 +443,6 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
         src={src}
         autoPlay
         playsInline
-        onClick={togglePlay}
         onLoadedMetadata={handleMetadataLoaded}
         onTimeUpdate={handleNativeTimeUpdate}
         onPlay={() => setIsPlaying(true)}
@@ -413,7 +454,7 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
           setIsPlaying(false);
           if (videoRef.current && onEnded) onEnded(videoRef.current.currentTime, videoRef.current.duration);
         }}
-        className="w-full h-full object-contain cursor-pointer"
+        className="w-full h-full object-contain"
       >
         {/* Injected subtitle track from user import */}
         {importedSubUrl && (
@@ -498,7 +539,7 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
               {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current" />}
             </button>
 
-            {/* Volume Icon & Slider */}
+            {/* Volume Icon & Slider - Show mute button always, slider hidden on mobile when NOT fullscreen */}
             <div className="flex items-center gap-2 group/vol">
               <button
                 onClick={toggleMute}
@@ -514,7 +555,9 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
                 step="0.05"
                 value={isMuted ? 0 : volume}
                 onChange={handleVolumeChange}
-                className="w-16 sm:w-20 h-1 accent-[#209cee] bg-white/20 rounded cursor-pointer transition-all"
+                className={`w-16 sm:w-20 h-1 accent-[#209cee] bg-white/20 rounded cursor-pointer transition-all ${
+                  isFullscreen ? 'block' : 'hidden sm:block'
+                }`}
                 title="Volume"
               />
             </div>
@@ -529,34 +572,38 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
 
           {/* RIGHT GROUP: Seek -10s, Seek +10s, CC, Settings, PiP, Fullscreen */}
           <div className="flex items-center gap-2 sm:gap-3">
-            {/* Seek -10s */}
+            {/* Seek -10s - Hidden on mobile when NOT fullscreen */}
             <button
               onClick={() => skipTime(-10)}
-              className="p-1.5 rounded-md hover:bg-white/10 text-slate-200 hover:text-white transition-colors flex items-center gap-1"
+              className={`p-1.5 rounded-md hover:bg-white/10 text-slate-200 hover:text-white transition-colors items-center gap-1 ${
+                isFullscreen ? 'flex' : 'hidden sm:flex'
+              }`}
               title="Rewind 10 Seconds"
             >
               <RotateCcw className="w-4 h-4" />
               <span className="text-[10px] font-bold font-mono">10</span>
             </button>
 
-            {/* Seek +10s */}
+            {/* Seek +10s - Hidden on mobile when NOT fullscreen */}
             <button
               onClick={() => skipTime(10)}
-              className="p-1.5 rounded-md hover:bg-white/10 text-slate-200 hover:text-white transition-colors flex items-center gap-1"
+              className={`p-1.5 rounded-md hover:bg-white/10 text-slate-200 hover:text-white transition-colors items-center gap-1 ${
+                isFullscreen ? 'flex' : 'hidden sm:flex'
+              }`}
               title="Forward 10 Seconds"
             >
               <RotateCw className="w-4 h-4" />
               <span className="text-[10px] font-bold font-mono">10</span>
             </button>
 
-            {/* CC Subtitles Button & Popup Menu */}
-            <div className="relative">
+            {/* CC Subtitles Button & Popup Menu - Hidden on mobile when NOT fullscreen */}
+            <div className={`relative ${isFullscreen ? 'block' : 'hidden sm:block'}`}>
               <button
                 onClick={() => {
                   setShowCcMenu(!showCcMenu);
                   setShowSpeedMenu(false);
                 }}
-                className={`px-1.5 py-0.5 rounded text-[11px] font-extrabold border transition-colors ${
+                className={`p-1.5 rounded text-[11px] font-extrabold border transition-colors ${
                   isCcActive
                     ? 'bg-[#209cee] text-white border-[#209cee]'
                     : 'bg-white/10 text-slate-300 border-white/20 hover:text-white'
@@ -655,8 +702,8 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
               />
             </div>
 
-            {/* Settings (Gear ⚙️) Button */}
-            <div className="relative">
+            {/* Settings (Gear ⚙️) Button - Hidden on mobile when NOT fullscreen */}
+            <div className={`relative ${isFullscreen ? 'block' : 'hidden sm:block'}`}>
               <button
                 onClick={() => setShowSpeedMenu(!showSpeedMenu)}
                 className={`p-1.5 rounded-md hover:bg-white/10 transition-colors ${
@@ -701,12 +748,24 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
 
             {/* Fullscreen Toggle */}
             <button
-              onClick={() => {
+              onClick={async () => {
                 if (!containerRef.current) return;
                 if (document.fullscreenElement) {
-                  document.exitFullscreen().catch(() => {});
+                  await document.exitFullscreen().catch(() => {});
+                  // Unlock orientation
+                  if (screen.orientation) {
+                    try {
+                      (screen.orientation as any).unlock();
+                    } catch (err) {}
+                  }
                 } else {
-                  containerRef.current.requestFullscreen().catch(() => {});
+                  await containerRef.current.requestFullscreen().catch(() => {});
+                  // Lock to landscape
+                  if (screen.orientation) {
+                    try {
+                      await (screen.orientation as any).lock('landscape').catch(() => {});
+                    } catch (err) {}
+                  }
                 }
               }}
               className="p-1.5 rounded-md hover:bg-white/10 text-slate-200 hover:text-white transition-colors"

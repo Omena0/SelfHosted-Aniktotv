@@ -7,6 +7,9 @@ export default {
   darkMode: 'class',
   theme: {
     extend: {
+      screens: {
+        'xs': '480px',
+      },
       colors: {
         anikoto: {
           bg: '#0b1622',

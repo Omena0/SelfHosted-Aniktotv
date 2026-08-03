@@ -11,7 +11,6 @@ export const AniListLibrary: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [usernameInput, setUsernameInput] = useState('');
-  const [activeUsername, setActiveUsername] = useState('');
   const [selectedItem, setSelectedItem] = useState<AniListUserLibraryItem | null>(null);
 
   const fetchLibrary = async (usernameToFetch?: string) => {
@@ -20,11 +19,6 @@ export const AniListLibrary: React.FC = () => {
       setError(null);
       const data = await api.getUserAniListLibrary(usernameToFetch);
       setItems(data);
-      if (usernameToFetch) {
-        setActiveUsername(usernameToFetch);
-      } else if (!activeUsername) {
-        setActiveUsername('astralquarks');
-      }
     } catch (err) {
       console.error('Failed to fetch AniList library:', err);
       setError(err instanceof Error ? err.message : 'Failed to load AniList library');
@@ -108,13 +102,8 @@ export const AniListLibrary: React.FC = () => {
               <Globe className="w-7 h-7 text-[#209cee]" />
               AniList Collection
             </h1>
-            {activeUsername && (
-              <span className="px-2.5 py-0.5 rounded-full bg-[#209cee]/10 border border-[#209cee]/30 text-[#209cee] text-xs font-bold">
-                Account: {activeUsername}
-              </span>
-            )}
           </div>
-          <p className="text-slate-400 text-xs sm:text-sm mt-1">
+          <p className="text-slate-400 text-sm mt-1">
             Viewing public anime collection directly from AniList account. Click any title card to view season details and personal notes.
           </p>
         </div>

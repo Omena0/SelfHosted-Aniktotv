@@ -138,12 +138,12 @@ export const Library: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#1a2a3e] pb-5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 border-b border-[#1a2a3e] pb-4 sm:pb-5">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white flex items-center gap-2.5 font-archivo">
-            <HardDrive className="w-7 h-7 text-[#209cee]" />
+          <h1 className="text-xl sm:text-2xl lg:text-3xl font-extrabold tracking-tight text-white flex items-center gap-2 sm:gap-2.5 font-archivo">
+            <HardDrive className="w-5 h-5 sm:w-6 sm:h-6 lg:w-7 lg:h-7 text-[#209cee]" />
             Local Anime Library
           </h1>
           <p className="text-slate-400 text-sm mt-1">
@@ -151,38 +151,39 @@ export const Library: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <button
             onClick={handleRescan}
             disabled={isRescanning}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#209cee] hover:bg-[#3caedc] text-white font-bold text-xs uppercase tracking-wider gpu-trans shadow-lg shadow-[#209cee]/20 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg sm:rounded-xl bg-[#209cee] hover:bg-[#3caedc] text-white font-bold text-[10px] sm:text-xs uppercase tracking-wider gpu-trans shadow-lg shadow-[#209cee]/20 disabled:opacity-50"
           >
-            <RotateCcw className={`w-4 h-4 ${isRescanning ? 'animate-spin' : ''}`} />
-            <span>{isRescanning ? 'Rescanning...' : 'Rescan Library'}</span>
+            <RotateCcw className={`w-3 h-3 sm:w-4 sm:h-4 ${isRescanning ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">{isRescanning ? 'Rescanning...' : 'Rescan Library'}</span>
+            <span className="sm:hidden">Rescan</span>
           </button>
 
           {hasActiveFilters && (
             <button
               onClick={handleResetFilters}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#142030] border border-[#1a2a3e] text-slate-300 hover:text-white hover:border-[#209cee] text-xs font-medium gpu-trans"
+              className="inline-flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-lg sm:rounded-xl bg-[#142030] border border-[#1a2a3e] text-slate-300 hover:text-white hover:border-[#209cee] text-[10px] sm:text-xs font-medium gpu-trans"
             >
-              Reset Filters
+              Reset
             </button>
           )}
         </div>
       </div>
 
       {/* Filter Toolbar with Pure Dark Styling */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 bg-[#142030] border border-[#1a2a3e] p-4 rounded-xl">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3 bg-[#142030] border border-[#1a2a3e] p-3 sm:p-4 rounded-lg sm:rounded-xl">
         {/* Search input */}
         <div className="relative">
-          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+          <Search className="w-3.5 h-3.5 sm:w-4 sm:h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
           <input
             type="text"
             placeholder="Search by title..."
             value={searchQuery}
             onChange={(e) => updateFilter('q', e.target.value)}
-            className="w-full bg-[#0b1622] border border-[#1a2a3e] rounded-md pl-9 pr-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-[#209cee]"
+            className="w-full bg-[#0b1622] border border-[#1a2a3e] rounded-md pl-8 sm:pl-9 pr-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-[#209cee]"
           />
         </div>
 
@@ -242,30 +243,30 @@ export const Library: React.FC = () => {
       </div>
 
       {/* Results summary bar */}
-      <div className="flex items-center justify-between text-xs text-slate-400 px-1">
+      <div className="flex items-center justify-between text-[10px] sm:text-xs text-slate-400 px-1">
         <span>
           Showing <strong className="text-white">{filteredLibrary.length}</strong> of{' '}
           <strong className="text-white">{library.length}</strong> titles
         </span>
         {hasActiveFilters && (
-          <span className="flex items-center gap-1 text-[#209cee]">
-            <Filter className="w-3.5 h-3.5" /> Filter Active
+          <span className="flex items-center gap-0.5 sm:gap-1 text-[#209cee]">
+            <Filter className="w-3 h-3 sm:w-3.5 sm:h-3.5" /> <span className="hidden xs:inline">Filter</span> Active
           </span>
         )}
       </div>
 
       {/* Main Grid Render */}
       {loading ? (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
           {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((i) => (
             <div
               key={i}
-              className="h-[300px] rounded-lg bg-[#142030] border border-[#1a2a3e] animate-pulse"
+              className="h-[250px] sm:h-[300px] rounded-lg bg-[#142030] border border-[#1a2a3e] animate-pulse"
             />
           ))}
         </div>
       ) : error ? (
-        <div className="p-8 rounded-xl bg-[#142030] border border-[#1a2a3e] text-center text-red-400 text-sm">
+        <div className="p-6 sm:p-8 rounded-lg sm:rounded-xl bg-[#142030] border border-[#1a2a3e] text-center text-red-400 text-xs sm:text-sm">
           {error}
         </div>
       ) : (

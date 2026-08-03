@@ -36,6 +36,7 @@ Stream your local anime collection through a polished web interface, sync with y
 ## Features
 
 - **Local Streaming** - Stream `.mp4`, `.mkv`, `.webm`, `.avi`, `.mov` files directly from your hard drive via HTTP Range requests
+- **📱 Mobile Access** - Access from any device on your local network (phone, tablet, laptop)
 - **AniList Integration** - Automatically fetches metadata, posters, genres and synopsis from AniList for every anime in your library
 - **Watch Progress Tracking** - Saves your position per episode; resume exactly where you left off
 - **Subtitle Import** - Import `.srt`, `.vtt`, `.ass` or `.ssa` subtitle files inside the player; the file is renamed to match the episode and saved permanently to disk for future sessions
@@ -43,9 +44,25 @@ Stream your local anime collection through a polished web interface, sync with y
 - **AniList Library Sync** - Browse your full AniList library (Watching, Completed, Planning, Paused, Dropped) alongside your local files
 - **Top Anime Sidebar** - Displays your highest-scored anime from AniList
 - **Airing Schedule** - Shows upcoming episodes for anime you are currently watching on AniList
-- **Custom Video Player** - Built-in player with seek preview thumbnails, playback speed control, Picture-in-Picture, and double-tap fullscreen toggle
+- **Custom Video Player** - Built-in player with seek preview thumbnails, playback speed control, Picture-in-Picture, double-tap fullscreen (auto-rotates on mobile), and subtitle support
 - **Local Status Categories** - Organize local files into `watching`, `planned`, and `finished` folders; the UI reflects these statuses automatically
 - **Library Rescan** - Refresh your library at any time with the Rescan button without restarting the server
+
+---
+
+## 📱 Access on Mobile/Tablet
+
+When you run AniStash Play, it displays **two URLs**:
+- **Local URL**: `http://localhost:4321` (for the same computer)
+- **Network URL**: `http://192.168.x.x:4321` (for other devices on your WiFi)
+
+**To access on your phone/tablet:**
+1. Make sure your device is connected to the **same WiFi network** as your computer
+2. Open your mobile browser (Chrome, Safari, etc.)
+3. Enter the **Network URL** shown in the startup screen
+4. Enjoy streaming your anime on mobile! 🎉
+
+The interface is fully responsive and optimized for mobile viewing.
 
 ---
 

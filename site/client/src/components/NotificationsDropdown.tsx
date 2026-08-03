@@ -199,34 +199,34 @@ export const NotificationsDropdown: React.FC<NotificationsDropdownProps> = ({
 
   return (
     <div
-      className="absolute right-0 top-12 w-80 sm:w-96 bg-[#0e1726] border border-[#1a2a3e] rounded-2xl shadow-2xl overflow-hidden z-50 animate-fadeIn flex flex-col max-h-[70vh]"
+      className="fixed right-2 sm:right-4 top-14 sm:top-16 w-[calc(100vw-1rem)] sm:w-96 max-w-md bg-[#0e1726] border border-[#1a2a3e] rounded-xl sm:rounded-2xl shadow-2xl overflow-hidden z-50 animate-fadeIn flex flex-col max-h-[75vh] sm:max-h-[70vh]"
       onClick={(e) => e.stopPropagation()}
     >
       {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-[#1a2a3e] bg-[#142030] flex-shrink-0">
-        <div className="flex items-center gap-2">
-          <Bell className="w-4 h-4 text-[#209cee]" />
-          <h3 className="text-sm font-extrabold text-white font-archivo">Schedule Notifications</h3>
+      <div className="flex items-center justify-between p-3 sm:p-4 border-b border-[#1a2a3e] bg-[#142030] flex-shrink-0">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <Bell className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#209cee] flex-shrink-0" />
+          <h3 className="text-xs sm:text-sm font-extrabold text-white font-archivo truncate">Schedule</h3>
           {urgentCount > 0 && (
-            <span className="px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 border border-red-500/40 text-[10px] font-black animate-pulse">
-              {urgentCount} Airing Soon (&lt;3h)
+            <span className="px-1.5 sm:px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 border border-red-500/40 text-[9px] sm:text-[10px] font-black animate-pulse whitespace-nowrap">
+              {urgentCount} Soon
             </span>
           )}
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
           <button
             onClick={fetchNotifications}
             disabled={loading}
             title="Refresh schedule"
             className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`w-3 h-3 sm:w-3.5 sm:h-3.5 ${loading ? 'animate-spin' : ''}`} />
           </button>
           <button
             onClick={markAllRead}
             title="Mark all notifications as read"
-            className="text-[11px] text-[#209cee] hover:underline font-bold"
+            className="hidden sm:block text-[11px] text-[#209cee] hover:underline font-bold"
           >
             Mark All Read
           </button>
@@ -235,35 +235,36 @@ export const NotificationsDropdown: React.FC<NotificationsDropdownProps> = ({
             title="Close notifications"
             className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
           >
-            <X className="w-3.5 h-3.5" />
+            <X className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
           </button>
         </div>
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center gap-1 p-2 bg-[#0b1622] border-b border-[#1a2a3e] text-[11px] font-bold overflow-x-auto scrollbar-none flex-shrink-0">
+      <div className="flex items-center gap-1 p-1.5 sm:p-2 bg-[#0b1622] border-b border-[#1a2a3e] text-[10px] sm:text-[11px] font-bold overflow-x-auto scrollbar-none flex-shrink-0">
         {[
-          { id: 'ALL', label: 'All' },
-          { id: 'URGENT', label: 'Airing Soon (<3h)' },
-          { id: 'CURRENT', label: 'Watching' },
-          { id: 'PLANNING', label: 'Planning (>7d)' },
+          { id: 'ALL', label: 'All', shortLabel: 'All' },
+          { id: 'URGENT', label: 'Soon', shortLabel: 'Soon' },
+          { id: 'CURRENT', label: 'Watching', shortLabel: 'Watch' },
+          { id: 'PLANNING', label: 'Planning', shortLabel: 'Plan' },
         ].map((tab) => (
           <button
             key={tab.id}
             onClick={() => setFilterTab(tab.id as any)}
-            className={`px-2.5 py-1 rounded-md whitespace-nowrap transition-colors ${
+            className={`px-2 sm:px-2.5 py-1 rounded-md whitespace-nowrap transition-colors ${
               filterTab === tab.id
                 ? 'bg-[#209cee] text-white'
                 : 'text-slate-400 hover:text-white hover:bg-[#142030]'
             }`}
           >
-            {tab.label}
+            <span className="hidden sm:inline">{tab.label}</span>
+            <span className="sm:hidden">{tab.shortLabel}</span>
           </button>
         ))}
       </div>
 
       {/* Notification List */}
-      <div className="p-3 overflow-y-auto flex-1 space-y-2.5 scrollbar-thin">
+      <div className="p-2 sm:p-3 overflow-y-auto flex-1 space-y-2 sm:space-y-2.5 scrollbar-thin">
         {loading && activeNotifications.length === 0 ? (
           <div className="p-8 text-center text-slate-500 text-xs animate-pulse">
             Loading upcoming episode schedules...
