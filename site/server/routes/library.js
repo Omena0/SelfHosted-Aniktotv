@@ -1,7 +1,7 @@
 import express from 'express';
 import { getAllTitles, getTitleBySlug, scanLibrary, saveMatchedMetadata } from '../services/scanner.js';
 import { searchAniListTitles } from '../services/anilistClient.js';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -114,6 +114,88 @@ router.get('/anime/:slug', async (req, res) => {
     res.status(500).json({
       success: false,
       error: err.message
+    });
+  }
+});
+
+
+
+// GET /api/library/notes/:slug
+// Returns content of notes.md for an anime title
+router.get('/notes/:slug', async (req, res) => {
+  try {
+    const libraryPath = getLibraryPath();
+    const title = await getTitleBySlug(req.params.slug, libraryPath);
+
+    if (!title) {
+      return res.status(404).json({
+        success: false,
+        error: 'Title not found',
+      });
+    }
+
+    const relPath = title.relFolderPath || title.folderName;
+    const notesPath = join(libraryPath, relPath, 'notes.md');
+
+    if (!existsSync(notesPath)) {
+      return res.json({
+        success: true,
+        exists: false,
+        notes: '',
+      });
+    }
+
+    const notesContent = readFileSync(notesPath, 'utf-8');
+    res.json({
+      success: true,
+      exists: true,
+      notes: notesContent,
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
+});
+
+// POST /api/library/notes/:slug
+// Saves / updates notes.md file for an anime title
+router.post('/notes/:slug', async (req, res) => {
+  try {
+    const { notes } = req.body;
+    if (typeof notes !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: 'Notes content must be a string',
+      });
+    }
+
+    const libraryPath = getLibraryPath();
+    const title = await getTitleBySlug(req.params.slug, libraryPath);
+
+    if (!title) {
+      return res.status(404).json({
+        success: false,
+        error: 'Title not found',
+      });
+    }
+
+    const relPath = title.relFolderPath || title.folderName;
+    const titlePath = join(libraryPath, relPath);
+    const notesPath = join(titlePath, 'notes.md');
+
+    writeFileSync(notesPath, notes, 'utf-8');
+
+    res.json({
+      success: true,
+      message: 'notes.md successfully saved',
+      notes,
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: err.message,
     });
   }
 });

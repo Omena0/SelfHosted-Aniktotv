@@ -46,3 +46,8 @@ temp/
 
 # OS specific
 desktop.ini
+
+node_modules/
+dist/
+*.log
+.anistash/

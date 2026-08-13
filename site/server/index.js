@@ -10,6 +10,7 @@ import streamRouter from './routes/stream.js';
 import progressRouter from './routes/progress.js';
 import anilistRouter from './routes/anilist.js';
 import imageRouter from './routes/image.js';
+import notificationsRouter from './routes/notifications.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -74,6 +75,7 @@ app.use('/api/stream', streamRouter);
 app.use('/api/progress', progressRouter);
 app.use('/api/anilist', anilistRouter);
 app.use('/api/image', imageRouter);
+app.use('/api/notifications', notificationsRouter);
 
 const SERVER_START_TIME = Date.now();
 

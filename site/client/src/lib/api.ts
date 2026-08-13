@@ -281,4 +281,44 @@ export const api = {
 
     return [];
   },
+
+  /**
+   * Get notes.md content for an anime title
+   */
+  getNotes: async (slug: string): Promise<{ success: boolean; exists: boolean; notes: string }> => {
+    return fetchJson<{ success: boolean; exists: boolean; notes: string }>(`/api/library/notes/${encodeURIComponent(slug)}`);
+  },
+
+  /**
+   * Save / overwrite notes.md content for an anime title
+   */
+  saveNotes: async (slug: string, notes: string): Promise<{ success: boolean; message?: string }> => {
+    return fetchJson<{ success: boolean; message?: string }>(`/api/library/notes/${encodeURIComponent(slug)}`, {
+      method: 'POST',
+      body: JSON.stringify({ notes }),
+    });
+  },
+
+  /**
+   * Get array of notification banner IDs dismissed by user (persisted in SQLite DB)
+   */
+  getDismissedNotifications: async (): Promise<string[]> => {
+    try {
+      const response = await fetchJson<{ success: boolean; dismissedIds: string[] }>('/api/notifications/dismissed');
+      return response.dismissedIds || [];
+    } catch (e) {
+      console.warn('Failed to fetch dismissed notifications from DB:', e);
+      return [];
+    }
+  },
+
+  /**
+   * Dismiss notification banner and persist in SQLite DB
+   */
+  dismissNotification: async (id: string): Promise<{ success: boolean }> => {
+    return fetchJson<{ success: boolean }>('/api/notifications/dismiss', {
+      method: 'POST',
+      body: JSON.stringify({ id }),
+    });
+  },
 };

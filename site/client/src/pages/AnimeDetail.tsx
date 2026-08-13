@@ -4,6 +4,7 @@ import { ChevronLeft, Play, List, Film, CheckCircle2, Sparkles, AlertCircle } fr
 import { api } from '../lib/api';
 import { AnimeDetail as IAnimeDetail, ProgressItem, getPosterUrl } from '../types';
 import { MetadataMatcherModal } from '../components/MetadataMatcherModal';
+import { NotesSection } from '../components/NotesSection';
 
 export const AnimeDetail: React.FC = () => {
   const { slug } = useParams<{ slug: string }>();
@@ -333,6 +334,9 @@ export const AnimeDetail: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Personal Notes Section (notes.md) */}
+      <NotesSection slug={anime.slug} />
 
       {/* Metadata Matcher Popup Modal */}
       <MetadataMatcherModal

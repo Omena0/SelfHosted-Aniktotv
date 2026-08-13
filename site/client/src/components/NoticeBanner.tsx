@@ -1,10 +1,41 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Bookmark, Share2, X } from 'lucide-react';
+import { api } from '../lib/api';
+
+const BANNER_ID = 'notice-bookmark-v1';
 
 export const NoticeBanner: React.FC = () => {
-  const [visible, setVisible] = useState(true);
+  const [visible, setVisible] = useState<boolean>(false);
+  const [loading, setLoading] = useState<boolean>(true);
 
-  if (!visible) return null;
+  useEffect(() => {
+    const checkDismissed = async () => {
+      try {
+        const dismissed = await api.getDismissedNotifications();
+        if (!dismissed.includes(BANNER_ID)) {
+          setVisible(true);
+        }
+      } catch (err) {
+        console.warn('Failed to check notification status:', err);
+        setVisible(true);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    checkDismissed();
+  }, []);
+
+  const handleDismiss = async () => {
+    setVisible(false);
+    try {
+      await api.dismissNotification(BANNER_ID);
+    } catch (err) {
+      console.warn('Failed to persist notification dismissal:', err);
+    }
+  };
+
+  if (loading || !visible) return null;
 
   return (
     <div className="rounded-lg bg-[#142030] border border-[#1a2a3e] p-3 text-xs text-slate-300 space-y-2 relative">
@@ -16,8 +47,9 @@ export const NoticeBanner: React.FC = () => {
           </span>
         </div>
         <button
-          onClick={() => setVisible(false)}
-          className="text-slate-400 hover:text-white p-0.5"
+          onClick={handleDismiss}
+          className="text-slate-400 hover:text-white p-0.5 rounded hover:bg-[#20334d] transition-colors"
+          title="Dismiss notification"
         >
           <X className="w-3.5 h-3.5" />
         </button>

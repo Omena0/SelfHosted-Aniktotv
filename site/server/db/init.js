@@ -52,6 +52,14 @@ export function initDatabase(libraryPath) {
       fetchedAt TEXT NOT NULL
     )
   `);
+
+  // Create dismissed notifications table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS dismissedNotifications (
+      id TEXT PRIMARY KEY,
+      dismissedAt TEXT NOT NULL
+    )
+  `);
   
   // Create index for fast sorting by lastWatchedAt
   db.exec(`
