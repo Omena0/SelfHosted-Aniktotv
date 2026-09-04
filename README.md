@@ -1,4 +1,6 @@
-﻿# AniStash Play - Your Local Anime Library and Player
+Renamed from Anistash-play to SelfHosted-Aniktotv
+ 
+ # AniStash Play - Your Local Anime Library and Player
 
 A self-hosted, privacy-first anime media server that runs entirely on your own machine.
 Stream your local anime collection through a polished web interface, sync with your AniList account, import external subtitles, and track your watch progress. No cloud, no accounts required to get started.
@@ -36,7 +38,7 @@ Stream your local anime collection through a polished web interface, sync with y
 ## Features
 
 - **Local Streaming** - Stream `.mp4`, `.mkv`, `.webm`, `.avi`, `.mov` files directly from your hard drive via HTTP Range requests
-- **📱 Mobile Access** - Access from any device on your local network (phone, tablet, laptop)
+- ** Mobile Access** - Access from any device on your local network (phone, tablet, laptop)
 - **AniList Integration** - Automatically fetches metadata, posters, genres and synopsis from AniList for every anime in your library
 - **Watch Progress Tracking** - Saves your position per episode; resume exactly where you left off
 - **Subtitle Import** - Import `.srt`, `.vtt`, `.ass` or `.ssa` subtitle files inside the player; the file is renamed to match the episode and saved permanently to disk for future sessions
