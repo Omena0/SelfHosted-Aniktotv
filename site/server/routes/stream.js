@@ -76,7 +76,19 @@ function resolveFfmpegPath() {
     }
   } catch { /* ignore */ }
 
-  // 3. No usable FFmpeg found
+  // 3. Check PATH for ffmpeg (covers WinGet/shim installs)
+  try {
+    const { execSync } = require('child_process');
+    const which = process.platform === 'win32' ? 'where' : 'which';
+    const result = execSync(`${which} ffmpeg 2>nul`, { encoding: 'utf-8' }).trim();
+    const pathBin = result.split('\n')[0]?.trim();
+    if (pathBin && existsSync(pathBin)) {
+      console.log(`✅ Using FFmpeg from PATH: ${pathBin}`);
+      return cachedFfmpegPath = pathBin;
+    }
+  } catch { /* ffmpeg not on PATH */ }
+
+  // 4. No usable FFmpeg found
   console.error('❌ FFmpeg not found. Add "ffmpegPath" to config.json or install FFmpeg.');
   return cachedFfmpegPath = null;
 }

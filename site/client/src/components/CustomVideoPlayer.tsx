@@ -220,7 +220,6 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
       .then((fonts) => {
         const fontMap: Record<string, string> = {};
         fonts.forEach((f) => {
-          const ext = f.filename.slice(f.filename.lastIndexOf('.') + 1).toLowerCase();
           const baseName = f.filename.slice(0, f.filename.lastIndexOf('.')).toLowerCase();
           // Map by various common name variations libass might look up
           fontMap[baseName] = f.dataUrl;           // "trebuchet ms bold"
