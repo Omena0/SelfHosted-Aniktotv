@@ -267,9 +267,12 @@ function transcodeAndStream(req, res, videoPath, stat, quality) {
   const ffmpeg = spawn(ffmpegBin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
   const cacheWriteStream = createWriteStream(tmpPath);
 
+  // During on-the-fly transcoding we CANNOT honor Range requests (FFmpeg pipes
+  // from the beginning). Do NOT advertise Accept-Ranges so the browser won't
+  // send seeking requests that result in full restarts. Once cached, the
+  // cache-serve path above does handle Range properly.
   res.status(200).set({
     'Content-Type': 'video/mp4',
-    'Accept-Ranges': 'bytes',
     'Cache-Control': 'no-cache',
   });
 

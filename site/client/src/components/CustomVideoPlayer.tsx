@@ -326,6 +326,7 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
       fonts: fontUrls,
       availableFonts: isEmbedded ? availableFonts : {},
       fallbackFont: '/libass/default.woff2',
+      lazyFileLoading: true,
       targetFps: 24,
       debug: false,
       onReady: () => {
