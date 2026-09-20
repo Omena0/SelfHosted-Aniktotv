@@ -73,10 +73,12 @@ export const api = {
   },
 
   /**
-   * Returns formatted media stream URL for the HTML <video> player
+   * Returns formatted media stream URL for the HTML <video> player.
+   * Quality is only relevant for formats that need transcoding (MKV etc.).
    */
-  getStreamUrl: (slug: string, season: string, file: string): string => {
-    return `/api/stream/${encodeURIComponent(slug)}/${encodeURIComponent(season)}/${encodeURIComponent(file)}`;
+  getStreamUrl: (slug: string, season: string, file: string, quality?: string): string => {
+    const url = `/api/stream/${encodeURIComponent(slug)}/${encodeURIComponent(season)}/${encodeURIComponent(file)}`;
+    return quality ? `${url}?quality=${encodeURIComponent(quality)}` : url;
   },
 
   /**
@@ -160,11 +162,23 @@ export const api = {
   },
 
   /**
-   * Build a URL for a single embedded subtitle track served as WebVTT
-   */
-  getSubtitleVttUrl: (slug: string, season: string, episodeFile: string, trackIndex: number): string => {
-    return `/api/stream/${encodeURIComponent(slug)}/${encodeURIComponent(season)}/${encodeURIComponent(episodeFile)}/embedded-subs/${trackIndex}`;
-  },
+    * Build a URL for a single embedded subtitle track served as ASS
+    * (raw ASS format — rendered client-side via SubtitlesOctopus/libass-wasm)
+    */
+   getSubtitleAssUrl: (slug: string, season: string, episodeFile: string, trackIndex: number): string => {
+     return `/api/stream/${encodeURIComponent(slug)}/${encodeURIComponent(season)}/${encodeURIComponent(episodeFile)}/embedded-subs/${trackIndex}`;
+   },
+
+   /**
+    * Fetch embedded fonts (MKV attachments) for ASS subtitle rendering
+    * via SubtitlesOctopus. Returns array of {filename, dataUrl}.
+    */
+   getEmbeddedFonts: async (slug: string, season: string, episodeFile: string): Promise<Array<{ filename: string; dataUrl: string }>> => {
+     const response = await fetchJson<{ success: boolean; fonts: Array<{ filename: string; dataUrl: string }> }>(
+       `/api/stream/${encodeURIComponent(slug)}/${encodeURIComponent(season)}/${encodeURIComponent(episodeFile)}/embedded-fonts`
+     );
+     return response.fonts || [];
+   },
 
   searchAniList: async (query: string): Promise<any[]> => {
     const response = await fetchJson<{ success: boolean; results: any[] }>(`/api/library/search-anilist?q=${encodeURIComponent(query)}`);
