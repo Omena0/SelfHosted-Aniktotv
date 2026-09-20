@@ -86,7 +86,7 @@ function resolveFfmpegPath() {
       console.log(`✅ Using FFmpeg from PATH: ${pathBin}`);
       return cachedFfmpegPath = pathBin;
     }
-  } catch { /* ffmpeg not on PATH */ }
+  } catch (e) { console.log(e) }
 
   // 4. No usable FFmpeg found
   console.error('❌ FFmpeg not found. Add "ffmpegPath" to config.json or install FFmpeg.');

@@ -521,8 +521,19 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
     if (!seekBarRef.current || !videoRef.current || !duration) return;
     const rect = seekBarRef.current.getBoundingClientRect();
     const offsetX = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
-    const newTime = (offsetX / rect.width) * duration;
-    videoRef.current.currentTime = newTime;
+    let newTime = (offsetX / rect.width) * duration;
+
+    // For transcoded/progressive streams, clamp seek to the buffered range
+    // to prevent "jump backwards" when clicking unbuffered regions.
+    const video = videoRef.current;
+    if (video.buffered && video.buffered.length > 0) {
+      const bufferedEnd = video.buffered.end(video.buffered.length - 1);
+      if (newTime > bufferedEnd) {
+        newTime = Math.min(newTime, bufferedEnd);
+      }
+    }
+
+    video.currentTime = newTime;
     setCurrentTime(newTime);
   };
 
