@@ -137,8 +137,23 @@ export const api = {
   },
 
   /**
-   * Search AniList titles for metadata matching
+   * List embedded subtitle tracks in a video file (MKV/ASS/etc.)
+   * Returns track index, language, and a label.
    */
+  getEmbeddedSubtitles: async (slug: string, season: string, episodeFile: string): Promise<Array<{ index: number; language: string; label: string; isDefault?: boolean }>> => {
+    const response = await fetchJson<{ success: boolean; tracks: Array<{ index: number; language: string; label: string }> }>(
+      `/api/stream/${encodeURIComponent(slug)}/${encodeURIComponent(season)}/${encodeURIComponent(episodeFile)}/embedded-subs`
+    );
+    return response.tracks || [];
+  },
+
+  /**
+   * Build a URL for a single embedded subtitle track served as WebVTT
+   */
+  getSubtitleVttUrl: (slug: string, season: string, episodeFile: string, trackIndex: number): string => {
+    return `/api/stream/${encodeURIComponent(slug)}/${encodeURIComponent(season)}/${encodeURIComponent(episodeFile)}/embedded-subs/${trackIndex}`;
+  },
+
   searchAniList: async (query: string): Promise<any[]> => {
     const response = await fetchJson<{ success: boolean; results: any[] }>(`/api/library/search-anilist?q=${encodeURIComponent(query)}`);
     return response.results || [];

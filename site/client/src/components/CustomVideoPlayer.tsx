@@ -65,6 +65,7 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
   const videoRef = useRef<HTMLVideoElement>(null);
   const previewVideoRef = useRef<HTMLVideoElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
+  const previewVideoSrcSetRef = useRef(false);
   const seekBarRef = useRef<HTMLDivElement>(null);
 
   // Player State
@@ -78,6 +79,8 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
   const [showSpeedMenu, setShowSpeedMenu] = useState<boolean>(false);
   const [controlsVisible, setControlsVisible] = useState<boolean>(true);
+  const [mediaError, setMediaError] = useState<string | null>(null);
+  const [embeddedSubTracks, setEmbeddedSubTracks] = useState<Array<{ index: number; language: string; label: string; isDefault?: boolean }>>([]);
 
   // Hover Seek Frame Preview State
   const [hoverTime, setHoverTime] = useState<number | null>(null);
@@ -123,6 +126,21 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
     api.getSubtitles(slug, season, episodeFile)
       .then(setDiskSubtitles)
       .catch(() => setDiskSubtitles([]));
+  }, [slug, season, episodeFile]);
+
+  // Load embedded subtitle tracks (extracted server-side as WebVTT)
+  useEffect(() => {
+    if (!slug || !season || !episodeFile) {
+      setEmbeddedSubTracks([]);
+      return;
+    }
+    // Only fetch for formats that require transcoding (Firefox can't read MKV subtitles)
+    const ext = episodeFile.slice(episodeFile.lastIndexOf('.')).toLowerCase();
+    if (['.mp4', '.webm', '.m4v'].includes(ext)) return;
+
+    api.getEmbeddedSubtitles(slug, season, episodeFile)
+      .then(setEmbeddedSubTracks)
+      .catch(() => setEmbeddedSubTracks([]));
   }, [slug, season, episodeFile]);
 
   // Handle subtitle file import from disk (user picks a file via file input)
@@ -196,6 +214,49 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
     setShowCcMenu(false);
   }, [importedSubLabel]);
 
+  // Detect HTML5 video text tracks (embedded subtitles in MP4/MKV containers)
+  const detectTextTracks = useCallback(() => {
+    if (!videoRef.current) return;
+    const tt = videoRef.current.textTracks;
+    if (!tt || tt.length === 0) return;
+
+    const tracks: Array<{ id: number; label: string; language: string }> = [];
+    for (let i = 0; i < tt.length; i++) {
+      tracks.push({
+        id: i,
+        label: tt[i].label || `Track ${i + 1} (${tt[i].language || 'en'})`,
+        language: tt[i].language || 'en',
+      });
+    }
+    setAvailableTracks(tracks);
+    if (tracks.length === 0) {
+      setSelectedTrackIndex(-1);
+      setIsCcActive(false);
+    }
+  }, []);
+
+  // Poll for text tracks — browsers may populate them asynchronously
+  // after loadedmetadata, or after <track> WebVTT files are fetched.
+  useEffect(() => {
+    if (!src) return;
+
+    detectTextTracks();
+
+    const interval = setInterval(() => {
+      detectTextTracks();
+    }, 200);
+
+    const timeout = setTimeout(() => {
+      clearInterval(interval);
+      detectTextTracks();
+    }, 3000);
+
+    return () => {
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
+  }, [src, detectTextTracks, embeddedSubTracks]);
+
   // Sync initialPosition when metadata loads
   const handleMetadataLoaded = () => {
     if (videoRef.current) {
@@ -203,25 +264,25 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
       if (initialPosition > 0) {
         videoRef.current.currentTime = initialPosition;
       }
-      // Detect real HTML5 video text tracks
-      const tt = videoRef.current.textTracks;
-      const tracks: Array<{ id: number; label: string; language: string }> = [];
-      if (tt && tt.length > 0) {
-        for (let i = 0; i < tt.length; i++) {
-          tracks.push({
-            id: i,
-            label: tt[i].label || `Track ${i + 1} (${tt[i].language || 'en'})`,
-            language: tt[i].language || 'en',
-          });
-        }
-      }
-      setAvailableTracks(tracks);
-      if (tracks.length === 0) {
-        setSelectedTrackIndex(-1);
-        setIsCcActive(false);
-      }
+      detectTextTracks();
     }
     if (onLoadedMetadata) onLoadedMetadata();
+  };
+
+  // Video Error Handler
+  const handleVideoError = () => {
+    if (videoRef.current && videoRef.current.error) {
+      const err = videoRef.current.error;
+      let msg = 'Playback error occurred';
+      switch (err.code) {
+        case 2: msg = 'Video format not supported or network error'; break;
+        case 3: msg = 'Video corrupted or not decodable'; break;
+        case 4: msg = 'Video load aborted'; break;
+        default: msg = `Playback error (code ${err.code})`; break;
+      }
+      console.error('Video error:', err);
+      setMediaError(msg);
+    }
   };
 
   const handleSelectTrack = (trackId: number) => {
@@ -387,8 +448,12 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
     setHoverTime(targetTime);
     setHoverPositionX(offsetX);
 
-    // Seek hidden preview video frame
+    // Lazily set the preview video source only when first needed for hover preview.
     if (previewVideoRef.current) {
+      if (!previewVideoSrcSetRef.current) {
+        previewVideoRef.current.src = src;
+        previewVideoSrcSetRef.current = true;
+      }
       previewVideoRef.current.currentTime = targetTime;
     }
   };
@@ -430,8 +495,7 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
       {/* Hidden Secondary Video Element for Real-Time Seek Hover Frame Previews */}
       <video
         ref={previewVideoRef}
-        src={src}
-        preload="metadata"
+        preload="none"
         muted
         className="hidden"
         onSeeked={handlePreviewSeeked}
@@ -441,9 +505,10 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
       <video
         ref={videoRef}
         src={src}
-        autoPlay
+        preload="metadata"
         playsInline
         onLoadedMetadata={handleMetadataLoaded}
+        onError={handleVideoError}
         onTimeUpdate={handleNativeTimeUpdate}
         onPlay={() => setIsPlaying(true)}
         onPause={() => {
@@ -454,19 +519,39 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
           setIsPlaying(false);
           if (videoRef.current && onEnded) onEnded(videoRef.current.currentTime, videoRef.current.duration);
         }}
-        className="w-full h-full object-contain"
-      >
-        {/* Injected subtitle track from user import */}
-        {importedSubUrl && (
-          <track
-            key={importedSubUrl}
-            kind="subtitles"
-            src={importedSubUrl}
-            label={importedSubLabel}
-            default
-          />
-        )}
-      </video>
+         className="w-full h-full object-contain"
+       >
+         {/* Injected subtitle track from user import */}
+         {importedSubUrl && (
+           <track
+             key={importedSubUrl}
+             kind="subtitles"
+             src={importedSubUrl}
+             label={importedSubLabel}
+             default
+           />
+         )}
+          {/* Embedded subtitle tracks extracted server-side as WebVTT */}
+          {embeddedSubTracks.map((track) => (
+            <track
+              key={`embedded-${track.index}`}
+              kind="subtitles"
+              label={track.label || `Subtitle ${track.index + 1}`}
+              src={
+                slug && season && episodeFile
+                  ? api.getSubtitleVttUrl(slug, season, episodeFile, track.index)
+                  : ''
+              }
+              default={track.isDefault}
+            />
+          ))}
+       </video>
+
+      {mediaError && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/90 text-red-400 text-sm">
+          {mediaError}
+        </div>
+      )}
 
       {/* Overlay Title Banner (Appears on hover) */}
       <div
