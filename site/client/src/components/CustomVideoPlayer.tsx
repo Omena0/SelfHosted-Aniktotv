@@ -115,7 +115,11 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
   // CC Tracks State
   const [showCcMenu, setShowCcMenu] = useState<boolean>(false);
   const [selectedTrackIndex, setSelectedTrackIndex] = useState<number>(-1);
-  const [availableTracks, setAvailableTracks] = useState<Array<{ id: number; label: string; language: string }>>([]);
+  const [selectedLabel, setSelectedLabel] = useState<string | null>(null);
+  // Native textTracks for MP4 files with browser-readable embedded subtitles.
+  // These are detected via short polling; embedded MKV tracks come from
+  // the server probe and are listed separately.
+  const [nativeTracks, setNativeTracks] = useState<Array<{ id: number; label: string; language: string }>>([]);
 
   // Subtitle import state
   const subtitleInputRef = useRef<HTMLInputElement>(null);
@@ -222,56 +226,56 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
       for (let i = 0; i < tt.length; i++) {
         tt[i].mode = i === importedIdx ? 'showing' : 'disabled';
       }
-      setSelectedTrackIndex(importedIdx);
+      setSelectedLabel(importedSubLabel);
+      setSelectedTrackIndex(0);
       setIsCcActive(true);
     }
     setShowCcMenu(false);
   }, [importedSubLabel]);
 
-  // Detect HTML5 video text tracks (embedded subtitles in MP4/MKV containers)
-  const detectTextTracks = useCallback(() => {
+  // Detect native HTML5 video text tracks (for MP4 files with browser-readable
+  // embedded subtitles). Shorter polling window since these load quickly.
+  // MKV tracks are listed directly from the server probe, no polling needed.
+  const detectNativeTracks = useCallback(() => {
     if (!videoRef.current) return;
     const tt = videoRef.current.textTracks;
     if (!tt || tt.length === 0) return;
 
     const tracks: Array<{ id: number; label: string; language: string }> = [];
     for (let i = 0; i < tt.length; i++) {
-      tracks.push({
-        id: i,
-        label: tt[i].label || `Track ${i + 1} (${tt[i].language || 'en'})`,
-        language: tt[i].language || 'en',
-      });
+      const label = tt[i].label || `Track ${i + 1} (${tt[i].language || 'en'})`;
+      const language = tt[i].language || 'en';
+      // Skip tracks that are already in our native list to avoid duplicates
+      const isDup = tracks.some(t => t.label === label && t.language === language);
+      if (!isDup) {
+        tracks.push({ id: i, label, language });
+      }
     }
-    setAvailableTracks(tracks);
-    if (tracks.length === 0) {
-      setSelectedTrackIndex(-1);
-      setIsCcActive(false);
-    }
+    setNativeTracks(tracks);
   }, []);
 
-  // Poll for text tracks — browsers may populate them asynchronously
-  // after loadedmetadata, or after <track> WebVTT files are fetched.
-  // Extended to 60s: some subtitle tracks appear only after the intro,
-  // so we keep polling to catch late-loading cue data.
+  // Short polling for native text tracks — browsers populate them asynchronously
+  // after loadedmetadata. Embedded MKV tracks come from the server probe and
+  // don't rely on textTracks, so 5s is sufficient.
   useEffect(() => {
     if (!src) return;
 
-    detectTextTracks();
+    detectNativeTracks();
 
     const interval = setInterval(() => {
-      detectTextTracks();
+      detectNativeTracks();
     }, 200);
 
     const timeout = setTimeout(() => {
       clearInterval(interval);
-      detectTextTracks();
-    }, 60000);
+      detectNativeTracks();
+    }, 5000);
 
     return () => {
       clearInterval(interval);
       clearTimeout(timeout);
     };
-  }, [src, detectTextTracks, embeddedSubTracks]);
+  }, [src, detectNativeTracks]);
 
   // Sync initialPosition when metadata loads
   const handleMetadataLoaded = () => {
@@ -282,7 +286,7 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
       if (initialPosition > 0) {
         videoRef.current.currentTime = initialPosition;
       }
-      detectTextTracks();
+      detectNativeTracks();
     }
     if (onLoadedMetadata) onLoadedMetadata();
   };
@@ -303,15 +307,31 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
     }
   };
 
-  const handleSelectTrack = (trackId: number) => {
-    setSelectedTrackIndex(trackId);
-    setIsCcActive(trackId >= 0);
-    if (videoRef.current && videoRef.current.textTracks) {
-      const tt = videoRef.current.textTracks;
-      for (let i = 0; i < tt.length; i++) {
-        tt[i].mode = i === trackId ? 'showing' : 'disabled';
-      }
+  // Select a caption track by label — finds the matching <track> element's
+  // TextTrack and sets its mode to 'showing'. This works for both embedded
+  // server-extracted tracks (WebVTT) and native MP4 text tracks.
+  const handleSelectTrack = (label: string) => {
+    if (!videoRef.current || !videoRef.current.textTracks) return;
+    const tt = videoRef.current.textTracks;
+    for (let i = 0; i < tt.length; i++) {
+      tt[i].mode = tt[i].label === label ? 'showing' : 'disabled';
     }
+    setSelectedLabel(label);
+    setSelectedTrackIndex(0);
+    setIsCcActive(true);
+    setShowCcMenu(false);
+  };
+
+  // Disable all caption tracks
+  const handleDisableTrack = () => {
+    if (!videoRef.current || !videoRef.current.textTracks) return;
+    const tt = videoRef.current.textTracks;
+    for (let i = 0; i < tt.length; i++) {
+      tt[i].mode = 'disabled';
+    }
+    setSelectedLabel(null);
+    setSelectedTrackIndex(-1);
+    setIsCcActive(false);
     setShowCcMenu(false);
   };
 
@@ -727,9 +747,9 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
 
                   {/* Disable option */}
                   <button
-                    onClick={() => handleSelectTrack(-1)}
+                    onClick={handleDisableTrack}
                     className={`w-full text-left px-2.5 py-1.5 rounded font-bold transition-colors ${
-                      selectedTrackIndex === -1
+                      selectedLabel === null
                         ? 'bg-[#209cee] text-white'
                         : 'text-slate-300 hover:bg-[#142030] hover:text-white'
                     }`}
@@ -737,20 +757,52 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
                     Off (Disable)
                   </button>
 
-                  {/* Embedded tracks from video file */}
-                  {availableTracks.map((tr) => (
-                    <button
-                      key={tr.id}
-                      onClick={() => handleSelectTrack(tr.id)}
-                      className={`w-full text-left px-2.5 py-1.5 rounded font-bold transition-colors ${
-                        selectedTrackIndex === tr.id
-                          ? 'bg-[#209cee] text-white'
-                          : 'text-slate-300 hover:bg-[#142030] hover:text-white'
-                      }`}
-                    >
-                      {tr.label}
-                    </button>
-                  ))}
+                  {/* Embedded subtitle tracks from server probe (MKV/ASS/etc.) */}
+                  {embeddedSubTracks.length > 0 && (
+                    <>
+                      <div className="text-[9px] uppercase text-slate-500 px-2 py-1 font-bold">Embedded</div>
+                      {embeddedSubTracks.map((tr) => {
+                        const label = tr.label || `Subtitle ${tr.index + 1}`;
+                        return (
+                          <button
+                            key={`embedded-${tr.index}`}
+                            onClick={() => handleSelectTrack(label)}
+                            className={`w-full text-left px-2.5 py-1.5 rounded font-bold transition-colors ${
+                              selectedLabel === label
+                                ? 'bg-[#209cee] text-white'
+                                : 'text-slate-300 hover:bg-[#142030] hover:text-white'
+                            }`}
+                            title={tr.language ? `${tr.language} — ${label}` : label}
+                          >
+                            <span className="flex items-center justify-between">
+                              <span>{label}</span>
+                              {tr.isDefault && <span className="text-[9px] text-green-400">•</span>}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </>
+                  )}
+
+                  {/* Native text tracks detected from video element (MP4 files) */}
+                  {nativeTracks.length > 0 && (
+                    <>
+                      <div className="text-[9px] uppercase text-slate-500 px-2 py-1 font-bold">Native</div>
+                      {nativeTracks.map((tr) => (
+                        <button
+                          key={`native-${tr.id}`}
+                          onClick={() => handleSelectTrack(tr.label)}
+                          className={`w-full text-left px-2.5 py-1.5 rounded font-bold transition-colors ${
+                            selectedLabel === tr.label
+                              ? 'bg-[#209cee] text-white'
+                              : 'text-slate-300 hover:bg-[#142030] hover:text-white'
+                          }`}
+                        >
+                          {tr.label}
+                        </button>
+                      ))}
+                    </>
+                  )}
 
                   {/* Imported / disk subtitles */}
                   {importedSubUrl && (
@@ -775,7 +827,7 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
                     </div>
                   )}
 
-                  {availableTracks.length === 0 && !importedSubUrl && diskSubtitles.length === 0 && (
+                  {embeddedSubTracks.length === 0 && nativeTracks.length === 0 && !importedSubUrl && diskSubtitles.length === 0 && (
                     <div className="px-2.5 py-1.5 text-[10px] text-slate-400 font-semibold italic">
                       No subtitle tracks in video
                     </div>
