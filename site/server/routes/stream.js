@@ -78,17 +78,15 @@ function resolveFfmpegPath() {
 
   // 3. Check PATH for ffmpeg (covers WinGet/shim installs)
   try {
-    const { execSync } = require('child_process');
     const isWin = process.platform === 'win32';
-    const cmd = isWin ? 'where.exe ffmpeg' : 'which ffmpeg';
-    const result = execSync(cmd, { encoding: 'utf-8' }).trim();
-    console.log(cmd, result);
-    const pathBin = result.split('\n')[0]?.trim().replace(/^.*?: /, '');
+    const cmd = isWin ? 'where.exe' : 'which';
+    const result = spawnSync(cmd, ['ffmpeg'], { encoding: 'utf-8' });
+    const pathBin = (result.stdout || '').split('\n')[0]?.trim().replace(/^.*?: /, '');
     if (pathBin && existsSync(pathBin)) {
       console.log(`✅ Using FFmpeg from PATH: ${pathBin}`);
       return cachedFfmpegPath = pathBin;
     }
-  } catch (e) { /* ffmpeg not on PATH */ }
+  } catch { /* ffmpeg not on PATH */ }
 
   // 4. No usable FFmpeg found
   console.error('❌ FFmpeg not found. Add "ffmpegPath" to config.json or install FFmpeg.');
