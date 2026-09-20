@@ -81,6 +81,10 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
   const [controlsVisible, setControlsVisible] = useState<boolean>(true);
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [embeddedSubTracks, setEmbeddedSubTracks] = useState<Array<{ index: number; language: string; label: string; isDefault?: boolean }>>([]);
+  // Server-probed duration for accurate seek-bar when transcoding (browser can't
+  // determine full duration during progressive streaming). Prefixed with "d" to
+  // avoid shadowing the local "d" variable in formatTime().
+  const [declaredDuration, setDeclaredDuration] = useState<number>(0);
 
   // Hover Seek Frame Preview State
   const [hoverTime, setHoverTime] = useState<number | null>(null);
@@ -141,6 +145,16 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
     api.getEmbeddedSubtitles(slug, season, episodeFile)
       .then(setEmbeddedSubTracks)
       .catch(() => setEmbeddedSubTracks([]));
+  }, [slug, season, episodeFile]);
+
+  // Load the original video duration from the server for accurate seeking.
+  // During transcoded streaming the browser's video.duration is unreliable
+  // (starts at NaN, grows as more data is received).
+  useEffect(() => {
+    if (!slug || !season || !episodeFile) return;
+    api.getVideoDuration(slug, season, episodeFile)
+      .then(setDeclaredDuration)
+      .catch(() => setDeclaredDuration(0));
   }, [slug, season, episodeFile]);
 
   // Handle subtitle file import from disk (user picks a file via file input)
@@ -237,6 +251,8 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
 
   // Poll for text tracks — browsers may populate them asynchronously
   // after loadedmetadata, or after <track> WebVTT files are fetched.
+  // Extended to 60s: some subtitle tracks appear only after the intro,
+  // so we keep polling to catch late-loading cue data.
   useEffect(() => {
     if (!src) return;
 
@@ -249,7 +265,7 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
     const timeout = setTimeout(() => {
       clearInterval(interval);
       detectTextTracks();
-    }, 3000);
+    }, 60000);
 
     return () => {
       clearInterval(interval);
@@ -260,7 +276,9 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
   // Sync initialPosition when metadata loads
   const handleMetadataLoaded = () => {
     if (videoRef.current) {
-      setDuration(videoRef.current.duration);
+      // Prefer server-probed duration during transcoded streaming
+      const dur = declaredDuration > 0 ? declaredDuration : videoRef.current.duration;
+      setDuration(dur || 0);
       if (initialPosition > 0) {
         videoRef.current.currentTime = initialPosition;
       }
@@ -301,7 +319,9 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
   const handleNativeTimeUpdate = () => {
     if (!videoRef.current) return;
     const cur = videoRef.current.currentTime;
-    const dur = videoRef.current.duration || 0;
+    // Prefer server-probed duration during transcoded streaming;
+    // fall back to browser-reported duration once it stabilises.
+    const dur = declaredDuration > 0 ? declaredDuration : (videoRef.current.duration || 0);
     setCurrentTime(cur);
     setDuration(dur);
     if (onTimeUpdate) onTimeUpdate(cur, dur);

@@ -137,6 +137,18 @@ export const api = {
   },
 
   /**
+   * Get original video duration (seconds) for seek-bar precision.
+   * Needed when transcoding/streaming — the browser's video.duration
+   * is unreliable during progressive transcoded streams.
+   */
+  getVideoDuration: async (slug: string, season: string, episodeFile: string): Promise<number> => {
+    const response = await fetchJson<{ success: boolean; duration?: number }>(
+      `/api/stream/${encodeURIComponent(slug)}/${encodeURIComponent(season)}/${encodeURIComponent(episodeFile)}/duration`
+    );
+    return response.duration || 0;
+  },
+
+  /**
    * List embedded subtitle tracks in a video file (MKV/ASS/etc.)
    * Returns track index, language, and a label.
    */

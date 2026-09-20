@@ -432,6 +432,83 @@ router.post('/:slug/:season/:episodeFile/subtitle', express.raw({ type: '*/*', l
 });
 
 /**
+ * Probe a video file for its duration using FFmpeg.
+ * Returns duration in seconds (float), or 0 if it cannot be determined.
+ */
+async function probeDuration(videoPath) {
+  const ffmpegBin = resolveFfmpegPath();
+  if (!ffmpegBin) return 0;
+
+  return new Promise((resolve) => {
+    // Use -t 1 to limit output to 1s; we only need the header info which
+    // FFmpeg prints immediately to stderr before processing frames.
+    const ffprobe = spawn(ffmpegBin, [
+      '-i', videoPath,
+      '-hide_banner',
+      '-t', '1',
+      '-f', 'null',
+      '-',
+    ], { stdio: ['ignore', 'ignore', 'pipe'] });
+
+    let stderr = '';
+    let settled = false;
+
+    const cleanup = () => {
+      if (!settled) {
+        settled = true;
+        ffprobe.kill();
+      }
+    };
+
+    ffprobe.stderr.on('data', (data) => {
+      stderr += data.toString();
+      // Duration appears in the header, before any frame processing
+      const m = stderr.match(/Duration:\s*(\d+):(\d+):(\d+)\.(\d+)/);
+      if (m) {
+        const h = parseInt(m[1], 10);
+        const min = parseInt(m[2], 10);
+        const s = parseInt(m[3], 10);
+        const ms = parseInt(m[4], 10);
+        cleanup();
+        resolve(h * 3600 + min * 60 + s + ms / 100);
+      }
+    });
+
+    ffprobe.on('close', () => {
+      if (settled) return;
+      settled = true;
+      // If we haven't resolved yet, try parsing what we have
+      const m = stderr.match(/Duration:\s*(\d+):(\d+):(\d+)\.(\d+)/);
+      if (m) {
+        const h = parseInt(m[1], 10);
+        const min = parseInt(m[2], 10);
+        const s = parseInt(m[3], 10);
+        const ms = parseInt(m[4], 10);
+        resolve(h * 3600 + min * 60 + s + ms / 100);
+      } else {
+        resolve(0);
+      }
+    });
+
+    ffprobe.on('error', () => {
+      if (!settled) {
+        settled = true;
+        resolve(0);
+      }
+    });
+
+    // Safety timeout — should never wait this long
+    setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        ffprobe.kill();
+        resolve(0);
+      }
+    }, 10000);
+  });
+}
+
+/**
  * Probe a video file for embedded subtitle tracks using FFmpeg.
  * Returns an array of { index, language, label } objects.
  */
@@ -479,6 +556,20 @@ async function probeSubtitleTracks(videoPath) {
     ffmpeg.on('error', () => resolve([]));
   });
 }
+
+// GET /api/stream/:slug/:season/:file/duration
+// Returns the original video duration (seconds) for seek-bar calculations.
+// This is needed for transcoded/streamed content where the browser cannot
+// determine the full duration until the entire stream is received.
+router.get('/:slug/:season/:file/duration', async (req, res) => {
+  const { slug, season, file } = req.params;
+  const result = await resolveVideoPath(slug, season, file);
+  if (result.error) return res.status(result.status).json({ success: false, error: result.error });
+
+  const { videoPath } = result;
+  const dur = await probeDuration(videoPath);
+  res.json({ success: true, duration: dur });
+});
 
 // GET /api/stream/:slug/:season/:file/embedded-subs
 // Returns list of embedded subtitle tracks in the video file
