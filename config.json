@@ -4,5 +4,6 @@
   "anilistClientSecret": "",
   "port": 4321,
   "libraryPath": "./anime",
-  "requireOAuth": false
+  "requireOAuth": false,
+  "autoMatchMetadata": true
 }

@@ -307,14 +307,13 @@ export const api = {
 
       const json = await res.json();
       if (json.data?.MediaListCollection?.lists) {
-        const collections = json.data.MediaListCollection.lists.flatMap((list: any) =>
-          list.entries.map((entry: any) => ({
-            ...entry,
-            listName: list.name,
-            listStatus: list.status,
-          }))
-        );
-        return collections;
+        return json.data.MediaListCollection.lists.flatMap((list: any) =>
+                  list.entries.map((entry: any) => ({
+                    ...entry,
+                    listName: list.name,
+                    listStatus: list.status,
+                  }))
+                );
       }
     } catch (err) {
       console.error('Direct browser fetch to AniList GraphQL failed:', err);

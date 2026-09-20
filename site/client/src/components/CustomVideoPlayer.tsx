@@ -212,11 +212,21 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
       .then(setEmbeddedSubTracks)
       .catch(() => setEmbeddedSubTracks([]));
 
-    // Fetch embedded fonts for SubtitlesOctopus/libass
+    // Fetch embedded fonts for SubtitlesOctopus/libass.
+    // Fonts are loaded via the `fonts` array (loaded into libass's filesystem
+    // where fontconfig matches them by internal font name). `availableFonts`
+    // provides additional name→URL mapping with common key variations.
     api.getEmbeddedFonts(slug, season, episodeFile)
       .then((fonts) => {
         const fontMap: Record<string, string> = {};
-        fonts.forEach((f) => { fontMap[f.filename] = f.dataUrl; });
+        fonts.forEach((f) => {
+          const ext = f.filename.slice(f.filename.lastIndexOf('.') + 1).toLowerCase();
+          const baseName = f.filename.slice(0, f.filename.lastIndexOf('.')).toLowerCase();
+          // Map by various common name variations libass might look up
+          fontMap[baseName] = f.dataUrl;           // "trebuchet ms bold"
+          fontMap[baseName.replace(/[-_]/g, ' ')] = f.dataUrl;  // "trebuchet ms bold" → "trebuchet ms bold"
+          fontMap[f.filename.toLowerCase()] = f.dataUrl;       // "trebuchet ms bold.ttf"
+        });
         setAvailableFonts(fontMap);
       })
       .catch(() => setAvailableFonts({}));
@@ -307,15 +317,16 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
     }
 
     const isEmbedded = !!options.subUrl;
-    const availableFontsObj = isEmbedded ? availableFonts : {};
+    const fontUrls = Object.values(isEmbedded ? availableFonts : {});
 
     subOctopusRef.current = new SubtitlesOctopus({
       video: videoRef.current,
       workerUrl: '/libass/subtitles-octopus-worker.js',
       subUrl: options.subUrl,
       subContent: options.subContent,
-      fonts: [],
-      availableFonts: availableFontsObj,
+      fonts: fontUrls,
+      availableFonts: isEmbedded ? availableFonts : {},
+      fallbackFont: '/libass/default.woff2',
       targetFps: 24,
       debug: false,
       onReady: () => {
