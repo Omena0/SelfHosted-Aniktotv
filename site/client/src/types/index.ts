@@ -96,6 +96,7 @@ export interface AppConfig {
   port?: number;
   libraryPath?: string;
   requireOAuth?: boolean;
+  autoMatchMetadata?: boolean;
 }
 
 export interface UpcomingItem {

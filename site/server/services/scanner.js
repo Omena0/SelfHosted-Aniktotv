@@ -1,10 +1,76 @@
 // Scanner service - walks anime/ folder and builds library index
 import { readdirSync, statSync, existsSync, readFileSync, writeFileSync } from 'fs';
-import { join, extname, parse } from 'path';
+import { join, extname, parse, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { fetchMetadataByName } from './anilistClient.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // In-memory library index
 let libraryIndex = [];
+
+// Cache for AniList search results to avoid duplicate lookups for the
+// same folder name during a single scan (e.g. re-scans, restarts).
+const anilistCache = new Map();
+
+/**
+ * Read config.json
+ */
+function getConfig() {
+  const configPath = join(__dirname, '../../../config.json');
+  try {
+    return JSON.parse(readFileSync(configPath, 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Resolve the library path from config.json
+ */
+function getLibraryPath() {
+  const config = getConfig();
+  const lib = config.libraryPath || './anime';
+  const projectRoot = join(__dirname, '../../..');
+  return lib.startsWith('.')
+    ? join(projectRoot, lib)
+    : lib;
+}
+
+/**
+ * Automatically match an anime folder to AniList metadata.
+ * Searches by folder name and, if a result is found, saves meta.json
+ * with the matched metadata (downloads poster/banner too).
+ * Returns the saved metadata object, or null if no match was found.
+ */
+export async function autoMatchAniList(folderName, libraryPath, relFolderPath) {
+  // Fuzzy cache: avoid re-querying AniList for the same name within one scan
+  const cacheKey = folderName.toLowerCase();
+  if (anilistCache.has(cacheKey)) {
+    return anilistCache.get(cacheKey);
+  }
+
+  try {
+    // Search AniList with the folder name
+    const media = await fetchMetadataByName(folderName);
+    if (!media) {
+      anilistCache.set(cacheKey, null);
+      return null;
+    }
+
+    const slug = toSlug(folderName);
+    const result = await saveMatchedMetadata(slug, media, libraryPath, relFolderPath);
+    anilistCache.set(cacheKey, result);
+    return result;
+  } catch (err) {
+    console.warn(`  ⚠️  Auto-match failed for "${folderName}":`, err.message);
+    anilistCache.set(cacheKey, null);
+    return null;
+  }
+}
+
+
 
 // Video file extensions we recognize
 const VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.webm', '.avi', '.mov'];
@@ -39,10 +105,9 @@ function naturalSort(a, b) {
     const bNum = parseInt(bPart, 10);
     
     if (!isNaN(aNum) && !isNaN(bNum)) {
-      if (aNum !== bNum) return aNum - bNum;
-    } else {
-      if (aPart !== bPart) return aPart.localeCompare(bPart);
-    }
+          if (aNum !== bNum) return aNum - bNum;
+        }
+    else if (aPart !== bPart) return aPart.localeCompare(bPart);
   }
   
   return 0;
@@ -97,8 +162,7 @@ async function loadMetadata(titlePath, folderName) {
   // If meta.json exists, load and return it
   if (existsSync(metaPath)) {
     try {
-      const meta = JSON.parse(readFileSync(metaPath, 'utf-8'));
-      return meta;
+      return JSON.parse(readFileSync(metaPath, 'utf-8'));
     } catch (err) {
       console.error(`  ⚠️  Failed to parse meta.json for ${folderName}:`, err.message);
       return null;
@@ -119,6 +183,22 @@ async function processSingleAnimeTitle(titlePath, folderName, localStatus, relFo
     
     // Load metadata if it exists (user has matched it), otherwise null
     const meta = await loadMetadata(titlePath, folderName);
+    
+    // Auto-match with AniList if no metadata exists and the feature is enabled
+    let matchedMeta = meta;
+    if (!meta && localStatus !== undefined) {
+      const config = getConfig();
+      if (config.autoMatchMetadata !== false) {
+        const libraryPath = getLibraryPath();
+        if (libraryPath) {
+          const anilistMeta = await autoMatchAniList(folderName, libraryPath, relFolderPath);
+          if (anilistMeta) {
+            matchedMeta = anilistMeta;
+            console.log(`✅ Auto-matched AniList metadata for: ${folderName}`);
+          }
+        }
+      }
+    }
     
     // Scan for season folders
     const seasons = [];
@@ -166,30 +246,30 @@ async function processSingleAnimeTitle(titlePath, folderName, localStatus, relFo
       }
     }
 
-    // If meta.json exists, update it with current season data
-    if (meta) {
-      meta.seasons = seasons;
-      meta.localStatus = localStatus;
-      meta.relFolderPath = relFolderPath;
+    // If metadata exists (loaded or auto-matched), update it with current season data
+    if (matchedMeta) {
+      matchedMeta.seasons = seasons;
+      matchedMeta.localStatus = localStatus;
+      matchedMeta.relFolderPath = relFolderPath;
       const metaPath = join(titlePath, 'meta.json');
-      writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+      writeFileSync(metaPath, JSON.stringify(matchedMeta, null, 2));
       
       console.log(`📁 [${localStatus}] ${folderName} - ${seasons.length} season(s), ${seasons.reduce((sum, s) => sum + s.episodes.length, 0)} episode(s)`);
       
       return {
-        slug: meta.slug,
-        folderName: meta.folderName,
+        slug: matchedMeta.slug,
+        folderName: matchedMeta.folderName,
         relFolderPath,
         localStatus,
-        title: meta.title,
-        poster: meta.poster,
-        format: meta.format,
-        status: meta.status,
-        genres: meta.genres,
-        seasons: meta.seasons,
+        title: matchedMeta.title,
+        poster: matchedMeta.poster,
+        format: matchedMeta.format,
+        status: matchedMeta.status,
+        genres: matchedMeta.genres,
+        seasons: matchedMeta.seasons,
         episodeCount: seasons.reduce((sum, s) => sum + s.episodes.length, 0),
         seasonsCount: seasons.length,
-        anilistId: meta.anilistId
+        anilistId: matchedMeta.anilistId
       };
     }
     
@@ -301,9 +381,9 @@ export function getLibraryIndex(libraryPath) {
 /**
  * Save selected AniList metadata for an anime and download its poster/banner
  */
-export async function saveMatchedMetadata(slug, anilistMedia, libraryPath) {
+export async function saveMatchedMetadata(slug, anilistMedia, libraryPath, relFolderPath) {
   const indexEntry = libraryIndex.find(t => t.slug === slug);
-  const relPath = indexEntry ? (indexEntry.relFolderPath || indexEntry.folderName) : slug;
+  const relPath = relFolderPath || (indexEntry ? (indexEntry.relFolderPath || indexEntry.folderName) : slug);
   const titlePath = join(libraryPath, relPath);
 
   if (!existsSync(titlePath)) {

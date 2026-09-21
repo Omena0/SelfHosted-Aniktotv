@@ -12,7 +12,8 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
-    "jsx": "react-jsx",
+     "jsx": "react-jsx",
+     "types": ["node"],
 
     /* Linting */
     "strict": true,
@@ -21,9 +22,8 @@
     "noFallthroughCasesInSwitch": true,
 
     /* Path alias */
-    "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["./src/*"]
     }
   },
   "include": ["src"],

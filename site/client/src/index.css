@@ -106,3 +106,21 @@
   will-change: transform, opacity;
   transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s ease, background-color 0.2s ease, border-color 0.2s ease;
 }
+
+/* SubtitlesOctopus (libass-wasm) canvas — must not intercept mouse events
+   so the seekbar and controls remain interactive. The canvas parent is
+   inserted as a sibling of the video; we force it to absolute positioning
+   within the player container so it overlays correctly without disrupting
+   the flex layout. */
+.libassjs-canvas-parent {
+  position: absolute !important;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 10;
+}
+.libassjs-canvas {
+  pointer-events: none;
+}

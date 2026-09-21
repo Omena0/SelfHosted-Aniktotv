@@ -13,6 +13,7 @@ import {
   Upload,
 } from 'lucide-react';
 import { api } from '../lib/api';
+import SubtitlesOctopus from 'libass-wasm';
 
 interface CustomVideoPlayerProps {
   src: string;
@@ -61,6 +62,11 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
   onEnded,
   onLoadedMetadata,
 }) => {
+   // Determine whether this file needs transcoding (MKV, AVI, etc.)
+  // or can be played natively (MP4, M4V, WEBM).
+  const fileExt = episodeFile ? episodeFile.slice(episodeFile.lastIndexOf('.')).toLowerCase() : src.slice(src.lastIndexOf('.')).toLowerCase();
+  const isNativePlayable = ['.mp4', '.webm', '.m4v'].includes(fileExt);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const previewVideoRef = useRef<HTMLVideoElement>(null);
@@ -86,12 +92,34 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
   // avoid shadowing the local "d" variable in formatTime().
   const [declaredDuration, setDeclaredDuration] = useState<number>(0);
 
+  // SubtitlesOctopus (libass-wasm) instance for rendering ASS subtitles
+  // with full feature support (\pos, \move, fonts, karaoke, etc.)
+  const subOctopusRef = useRef<SubtitlesOctopus | null>(null);
+  const [availableFonts, setAvailableFonts] = useState<Record<string, string>>({});
+
+  // Quality selection for transcoded streams.
+  // 'auto' lets the server pick based on available encoder (NVENC/QSV/AMF/CPU).
+  const [selectedQuality, setSelectedQuality] = useState<string>('auto');
+  const QUALITY_OPTIONS: Array<{ value: string; label: string }> = [
+    { value: 'auto', label: 'Auto' },
+    { value: 'high', label: '1080p' },
+    { value: 'medium', label: '720p' },
+    { value: 'low', label: '480p' },
+  ];
+
   // Hover Seek Frame Preview State
   const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [hoverPositionX, setHoverPositionX] = useState<number>(0);
   const [hasPreviewFrame, setHasPreviewFrame] = useState<boolean>(false);
 
   const hideControlsTimer = useRef<NodeJS.Timeout | null>(null);
+
+  // Build the actual video URL — appends quality param for transcoded formats
+  const videoSrc = React.useMemo(() => {
+    if (!src) return '';
+    const separator = src.includes('?') ? '&' : '?';
+    return src.includes('quality=') ? src : `${src}${separator}quality=${encodeURIComponent(selectedQuality)}`;
+  }, [src, selectedQuality]);
 
   // Auto-hide controls after inactivity
   const handleMouseMove = useCallback(() => {
@@ -109,21 +137,53 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
   useEffect(() => {
     return () => {
       if (hideControlsTimer.current) clearTimeout(hideControlsTimer.current);
+      if (subOctopusRef.current) {
+        subOctopusRef.current.dispose();
+        subOctopusRef.current = null;
+      }
     };
   }, []);
 
   // CC Tracks State
   const [showCcMenu, setShowCcMenu] = useState<boolean>(false);
-  const [selectedTrackIndex, setSelectedTrackIndex] = useState<number>(-1);
   const [selectedLabel, setSelectedLabel] = useState<string | null>(null);
-  // Native textTracks for MP4 files with browser-readable embedded subtitles.
-  // These are detected via short polling; embedded MKV tracks come from
-  // the server probe and are listed separately.
+
+   // Native textTracks for MP4 files with browser-readable embedded subtitles.
   const [nativeTracks, setNativeTracks] = useState<Array<{ id: number; label: string; language: string }>>([]);
+
+  // Populate native track list for natively-playable files (MP4/M4V/WebM).
+  // Browsers populate textTracks asynchronously after loadedmetadata, so we
+  // use short polling that stops after 3 seconds.
+  const detectNativeTracks = useCallback(() => {
+    if (!videoRef.current) return;
+    const tt = videoRef.current.textTracks;
+    if (!tt || tt.length === 0) return;
+
+    const tracks: Array<{ id: number; label: string; language: string }> = [];
+    for (let i = 0; i < tt.length; i++) {
+      const label = tt[i].label || `Track ${i + 1} (${tt[i].language || 'en'})`;
+      const language = tt[i].language || 'en';
+      const isDup = tracks.some(t => t.label === label && t.language === language);
+      if (!isDup) tracks.push({ id: i, label, language });
+    }
+    setNativeTracks(tracks);
+  }, []);
+
+  useEffect(() => {
+    if (!videoSrc || !isNativePlayable) return;
+    detectNativeTracks();
+    const interval = setInterval(detectNativeTracks, 200);
+    const timeout = setTimeout(() => {
+      clearInterval(interval);
+      detectNativeTracks();
+    }, 3000);
+    return () => { clearInterval(interval); clearTimeout(timeout); };
+  }, [videoSrc, isNativePlayable, detectNativeTracks]);
 
   // Subtitle import state
   const subtitleInputRef = useRef<HTMLInputElement>(null);
-  const [importedSubUrl, setImportedSubUrl] = useState<string | null>(null); // blob URL for injected <track>
+  const [importedSubUrl, setImportedSubUrl] = useState<string | null>(null); // blob URL for native <track>
+  const [importedSubContent, setImportedSubContent] = useState<string | null>(null); // raw ASS/SSA content for SubtitlesOctopus
   const [importedSubLabel, setImportedSubLabel] = useState<string>('');
   const [subSaveStatus, setSubSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [diskSubtitles, setDiskSubtitles] = useState<Array<{ fileName: string; ext: string }>>([]);
@@ -136,20 +196,40 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
       .catch(() => setDiskSubtitles([]));
   }, [slug, season, episodeFile]);
 
-  // Load embedded subtitle tracks (extracted server-side as WebVTT)
+  // Load embedded subtitle tracks and fonts (extracted server-side as raw ASS)
   useEffect(() => {
     if (!slug || !season || !episodeFile) {
       setEmbeddedSubTracks([]);
       return;
     }
     // Only fetch for formats that require transcoding (Firefox can't read MKV subtitles)
-    const ext = episodeFile.slice(episodeFile.lastIndexOf('.')).toLowerCase();
-    if (['.mp4', '.webm', '.m4v'].includes(ext)) return;
+    if (isNativePlayable) {
+      setEmbeddedSubTracks([]);
+      return;
+    }
 
     api.getEmbeddedSubtitles(slug, season, episodeFile)
       .then(setEmbeddedSubTracks)
       .catch(() => setEmbeddedSubTracks([]));
-  }, [slug, season, episodeFile]);
+
+    // Fetch embedded fonts for SubtitlesOctopus/libass.
+    // Fonts are loaded via the `fonts` array (loaded into libass's filesystem
+    // where fontconfig matches them by internal font name). `availableFonts`
+    // provides additional name→URL mapping with common key variations.
+    api.getEmbeddedFonts(slug, season, episodeFile)
+      .then((fonts) => {
+        const fontMap: Record<string, string> = {};
+        fonts.forEach((f) => {
+          const baseName = f.filename.slice(0, f.filename.lastIndexOf('.')).toLowerCase();
+          // Map by various common name variations libass might look up
+          fontMap[baseName] = f.dataUrl;           // "trebuchet ms bold"
+          fontMap[baseName.replace(/[-_]/g, ' ')] = f.dataUrl;  // "trebuchet ms bold" → "trebuchet ms bold"
+          fontMap[f.filename.toLowerCase()] = f.dataUrl;       // "trebuchet ms bold.ttf"
+        });
+        setAvailableFonts(fontMap);
+      })
+      .catch(() => setAvailableFonts({}));
+  }, [slug, season, episodeFile, isNativePlayable]);
 
   // Load the original video duration from the server for accurate seeking.
   // During transcoded streaming the browser's video.duration is unreliable
@@ -157,16 +237,25 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
   useEffect(() => {
     if (!slug || !season || !episodeFile) return;
     api.getVideoDuration(slug, season, episodeFile)
-      .then(setDeclaredDuration)
+      .then((dur) => {
+        setDeclaredDuration(dur);
+        // Immediately update duration state so seek bar reflects true length
+        // even before the video's own loadedmetadata fires
+        if (dur > 0) {
+          setDuration(dur);
+        }
+      })
       .catch(() => setDeclaredDuration(0));
   }, [slug, season, episodeFile]);
 
   // Handle subtitle file import from disk (user picks a file via file input)
+  // For SRT/VTT: converts to WebVTT blob URL for native <track> support.
+  // For ASS/SSA: stores content for SubtitlesOctopus rendering.
   const handleSubtitleImport = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const ext = file.name.slice(file.name.lastIndexOf('.')); // e.g. '.srt'
+    const ext = file.name.slice(file.name.lastIndexOf('.'));
     const allowed = ['.srt', '.vtt', '.ass', '.ssa'];
     if (!allowed.includes(ext.toLowerCase())) {
       alert('Only .srt, .vtt, .ass and .ssa subtitle files are supported.');
@@ -176,23 +265,27 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
     const buffer = await file.arrayBuffer();
     let content = new TextDecoder('utf-8').decode(buffer);
 
-    // Convert .srt / .ass / .ssa to WebVTT for native browser <track> support
-    let vttContent = content;
-    if (ext.toLowerCase() === '.srt') {
-      vttContent = 'WEBVTT\n\n' + content
-        .replace(/\r\n/g, '\n')
-        .replace(/\r/g, '\n')
-        .replace(/(\d\d:\d\d:\d\d),(\d\d\d)/g, '$1.$2'); // SRT -> VTT timestamp
+    // For ASS/SSA files, store content for SubtitlesOctopus rendering
+    if (ext.toLowerCase() === '.ass' || ext.toLowerCase() === '.ssa') {
+      if (importedSubUrl) URL.revokeObjectURL(importedSubUrl);
+      setImportedSubContent(content);
+      setImportedSubLabel(file.name);
+      setImportedSubUrl(null);
+    } else {
+      // SRT: convert to WebVTT for native <track> support
+      let vttContent = content;
+      if (ext.toLowerCase() === '.srt') {
+        vttContent = 'WEBVTT\n\n' + content
+          .replace(/\r\n/g, '\n')
+          .replace(/\r/g, '\n')
+          .replace(/(\d\d:\d\d:\d\d),(\d\d\d)/g, '$1.$2');
+      }
+      const blob = new Blob([vttContent], { type: 'text/vtt' });
+      const url = URL.createObjectURL(blob);
+      if (importedSubUrl) URL.revokeObjectURL(importedSubUrl);
+      setImportedSubUrl(url);
+      setImportedSubLabel(file.name);
     }
-
-    // Create a blob URL for the <track> element
-    const blob = new Blob([vttContent], { type: 'text/vtt' });
-    const url = URL.createObjectURL(blob);
-
-    // Revoke old blob URL
-    if (importedSubUrl) URL.revokeObjectURL(importedSubUrl);
-    setImportedSubUrl(url);
-    setImportedSubLabel(file.name);
 
     // Save to disk via API so it persists for future playback
     if (slug && season && episodeFile) {
@@ -200,7 +293,6 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
       try {
         await api.uploadSubtitle(slug, season, episodeFile, buffer, ext);
         setSubSaveStatus('saved');
-        // Refresh disk subtitle list
         const updated = await api.getSubtitles(slug, season, episodeFile);
         setDiskSubtitles(updated);
       } catch {
@@ -210,72 +302,110 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
       }
     }
 
-    // Reset file input so same file can be re-selected
     if (subtitleInputRef.current) subtitleInputRef.current.value = '';
   }, [slug, season, episodeFile, importedSubUrl]);
 
-  // Activate the imported subtitle track (injected via blob URL)
-  const handleActivateImported = useCallback(() => {
+  // Initialize SubtitlesOctopus for rendering ASS subtitles
+  const initSubtitlesOctopus = useCallback((options: { subUrl?: string; subContent?: string }) => {
     if (!videoRef.current) return;
-    const tt = videoRef.current.textTracks;
-    let importedIdx = -1;
-    for (let i = 0; i < tt.length; i++) {
-      if (tt[i].label === importedSubLabel) { importedIdx = i; break; }
+
+    // Dispose any existing instance first
+    if (subOctopusRef.current) {
+      subOctopusRef.current.dispose();
+      subOctopusRef.current = null;
     }
-    if (importedIdx >= 0) {
-      for (let i = 0; i < tt.length; i++) {
-        tt[i].mode = i === importedIdx ? 'showing' : 'disabled';
+
+    const isEmbedded = !!options.subUrl;
+    const fontUrls = Object.values(isEmbedded ? availableFonts : {});
+
+    subOctopusRef.current = new SubtitlesOctopus({
+      video: videoRef.current,
+      workerUrl: '/libass/subtitles-octopus-worker.js',
+      subUrl: options.subUrl,
+      subContent: options.subContent,
+      fonts: fontUrls,
+      availableFonts: isEmbedded ? availableFonts : {},
+      fallbackFont: '/libass/default.woff2',
+      lazyFileLoading: true,
+      targetFps: 24,
+      debug: false,
+      onReady: () => {
+        setIsCcActive(true);
+      },
+      onError: (error: any) => {
+        console.error('SubtitlesOctopus error:', error);
       }
-      setSelectedLabel(importedSubLabel);
-      setSelectedTrackIndex(0);
-      setIsCcActive(true);
+    });
+
+    setSelectedLabel(options.subUrl ? 'Embedded Sub' : (importedSubLabel || 'Imported Sub'));
+    setShowCcMenu(false);
+  }, [availableFonts, importedSubLabel]);
+
+  // Activate the imported subtitle track.
+  // For native SRT/VTT (importedSubUrl): use HTML5 textTracks.
+  // For ASS/SSA (importedSubContent): use SubtitlesOctopus.
+  const handleActivateImported = useCallback(() => {
+    if (importedSubContent) {
+      initSubtitlesOctopus({ subContent: importedSubContent });
+    } else if (importedSubUrl && videoRef.current) {
+      const tt = videoRef.current.textTracks;
+      let importedIdx = -1;
+      for (let i = 0; i < tt.length; i++) {
+        if (tt[i].label === importedSubLabel) { importedIdx = i; break; }
+      }
+      if (importedIdx >= 0) {
+        for (let i = 0; i < tt.length; i++) {
+          tt[i].mode = i === importedIdx ? 'showing' : 'disabled';
+        }
+        setSelectedLabel(importedSubLabel);
+        setIsCcActive(true);
+      }
     }
     setShowCcMenu(false);
-  }, [importedSubLabel]);
+  }, [importedSubUrl, importedSubContent, importedSubLabel, initSubtitlesOctopus]);
 
-  // Detect native HTML5 video text tracks (for MP4 files with browser-readable
-  // embedded subtitles). Shorter polling window since these load quickly.
-  // MKV tracks are listed directly from the server probe, no polling needed.
-  const detectNativeTracks = useCallback(() => {
-    if (!videoRef.current) return;
+  // Select a caption track by label
+  // For embedded ASS tracks: init SubtitlesOctopus with ASS URL
+  // For native MP4 text tracks: use textTracks API
+  const handleSelectTrack = (label: string) => {
+    if (!videoRef.current || !videoRef.current.textTracks) return;
+
+    // Check if this is an embedded track (needs SubtitlesOctopus for ASS)
+    const embeddedTrack = embeddedSubTracks.find(t => (t.label || `Subtitle ${t.index + 1}`) === label);
+
+    if (embeddedTrack && !isNativePlayable) {
+      // Use SubtitlesOctopus for embedded ASS subtitles
+      const subUrl = api.getSubtitleAssUrl(slug!, season!, episodeFile!, embeddedTrack.index);
+      initSubtitlesOctopus({ subUrl });
+      return;
+    }
+
+    // Native textTracks selection (for MP4 files with browser-readable subtitles)
     const tt = videoRef.current.textTracks;
-    if (!tt || tt.length === 0) return;
-
-    const tracks: Array<{ id: number; label: string; language: string }> = [];
     for (let i = 0; i < tt.length; i++) {
-      const label = tt[i].label || `Track ${i + 1} (${tt[i].language || 'en'})`;
-      const language = tt[i].language || 'en';
-      // Skip tracks that are already in our native list to avoid duplicates
-      const isDup = tracks.some(t => t.label === label && t.language === language);
-      if (!isDup) {
-        tracks.push({ id: i, label, language });
+      tt[i].mode = tt[i].label === label ? 'showing' : 'disabled';
+    }
+    setSelectedLabel(label);
+    setIsCcActive(true);
+    setShowCcMenu(false);
+  };
+
+  // Disable all caption tracks and dispose SubtitlesOctopus
+  const handleDisableTrack = () => {
+    if (subOctopusRef.current) {
+      subOctopusRef.current.dispose();
+      subOctopusRef.current = null;
+    }
+    if (videoRef.current && videoRef.current.textTracks) {
+      const tt = videoRef.current.textTracks;
+      for (let i = 0; i < tt.length; i++) {
+        tt[i].mode = 'disabled';
       }
     }
-    setNativeTracks(tracks);
-  }, []);
-
-  // Short polling for native text tracks — browsers populate them asynchronously
-  // after loadedmetadata. Embedded MKV tracks come from the server probe and
-  // don't rely on textTracks, so 5s is sufficient.
-  useEffect(() => {
-    if (!src) return;
-
-    detectNativeTracks();
-
-    const interval = setInterval(() => {
-      detectNativeTracks();
-    }, 200);
-
-    const timeout = setTimeout(() => {
-      clearInterval(interval);
-      detectNativeTracks();
-    }, 5000);
-
-    return () => {
-      clearInterval(interval);
-      clearTimeout(timeout);
-    };
-  }, [src, detectNativeTracks]);
+    setSelectedLabel(null);
+    setIsCcActive(false);
+    setShowCcMenu(false);
+  };
 
   // Sync initialPosition when metadata loads
   const handleMetadataLoaded = () => {
@@ -286,7 +416,6 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
       if (initialPosition > 0) {
         videoRef.current.currentTime = initialPosition;
       }
-      detectNativeTracks();
     }
     if (onLoadedMetadata) onLoadedMetadata();
   };
@@ -305,34 +434,6 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
       console.error('Video error:', err);
       setMediaError(msg);
     }
-  };
-
-  // Select a caption track by label — finds the matching <track> element's
-  // TextTrack and sets its mode to 'showing'. This works for both embedded
-  // server-extracted tracks (WebVTT) and native MP4 text tracks.
-  const handleSelectTrack = (label: string) => {
-    if (!videoRef.current || !videoRef.current.textTracks) return;
-    const tt = videoRef.current.textTracks;
-    for (let i = 0; i < tt.length; i++) {
-      tt[i].mode = tt[i].label === label ? 'showing' : 'disabled';
-    }
-    setSelectedLabel(label);
-    setSelectedTrackIndex(0);
-    setIsCcActive(true);
-    setShowCcMenu(false);
-  };
-
-  // Disable all caption tracks
-  const handleDisableTrack = () => {
-    if (!videoRef.current || !videoRef.current.textTracks) return;
-    const tt = videoRef.current.textTracks;
-    for (let i = 0; i < tt.length; i++) {
-      tt[i].mode = 'disabled';
-    }
-    setSelectedLabel(null);
-    setSelectedTrackIndex(-1);
-    setIsCcActive(false);
-    setShowCcMenu(false);
   };
 
   // Video Time Update
@@ -421,8 +522,19 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
     if (!seekBarRef.current || !videoRef.current || !duration) return;
     const rect = seekBarRef.current.getBoundingClientRect();
     const offsetX = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
-    const newTime = (offsetX / rect.width) * duration;
-    videoRef.current.currentTime = newTime;
+    let newTime = (offsetX / rect.width) * duration;
+
+    // For transcoded/progressive streams, clamp seek to the buffered range
+    // to prevent "jump backwards" when clicking unbuffered regions.
+    const video = videoRef.current;
+    if (video.buffered && video.buffered.length > 0) {
+      const bufferedEnd = video.buffered.end(video.buffered.length - 1);
+      if (newTime > bufferedEnd) {
+        newTime = Math.min(newTime, bufferedEnd);
+      }
+    }
+
+    video.currentTime = newTime;
     setCurrentTime(newTime);
   };
 
@@ -544,7 +656,7 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
       {/* Primary Video Element */}
       <video
         ref={videoRef}
-        src={src}
+        src={videoSrc}
         preload="metadata"
         playsInline
         onLoadedMetadata={handleMetadataLoaded}
@@ -562,30 +674,16 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
          className="w-full h-full object-contain"
        >
          {/* Injected subtitle track from user import */}
-         {importedSubUrl && (
-           <track
-             key={importedSubUrl}
-             kind="subtitles"
-             src={importedSubUrl}
-             label={importedSubLabel}
-             default
-           />
-         )}
-          {/* Embedded subtitle tracks extracted server-side as WebVTT */}
-          {embeddedSubTracks.map((track) => (
+          {importedSubUrl && !importedSubContent && (
             <track
-              key={`embedded-${track.index}`}
+              key={importedSubUrl}
               kind="subtitles"
-              label={track.label || `Subtitle ${track.index + 1}`}
-              src={
-                slug && season && episodeFile
-                  ? api.getSubtitleVttUrl(slug, season, episodeFile, track.index)
-                  : ''
-              }
-              default={track.isDefault}
+              src={importedSubUrl}
+              label={importedSubLabel}
+              default
             />
-          ))}
-       </video>
+          )}
+        </video>
 
       {mediaError && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/90 text-red-400 text-sm">
@@ -890,6 +988,35 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
                       {s === 1 ? '1.0x (Normal)' : `${s}x`}
                     </button>
                   ))}
+
+                  {/* Quality Selector */}
+                  <div className="border-t border-[#1a2a3e] pt-1 mt-1">
+                    <div className="text-[10px] font-bold uppercase text-slate-400 px-2 py-1">
+                      Quality
+                    </div>
+                    {QUALITY_OPTIONS.map((q) => (
+                      <button
+                        key={q.value}
+                        onClick={() => {
+                          setSelectedQuality(q.value);
+                          setShowSpeedMenu(false);
+                          // Restart video with new quality
+                          if (videoRef.current) {
+                            const currentPos = videoRef.current.currentTime;
+                            videoRef.current.load();
+                            videoRef.current.currentTime = currentPos;
+                          }
+                        }}
+                        className={`w-full text-left px-2.5 py-1 rounded font-bold transition-colors ${
+                          selectedQuality === q.value
+                            ? 'bg-[#209cee] text-white'
+                            : 'text-slate-300 hover:bg-[#142030] hover:text-white'
+                        }`}
+                      >
+                        {q.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>

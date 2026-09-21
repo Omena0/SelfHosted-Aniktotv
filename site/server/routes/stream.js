@@ -1,17 +1,16 @@
 import express from 'express';
 import { statSync, createReadStream, createWriteStream, existsSync, writeFileSync, mkdirSync, unlinkSync, renameSync } from 'fs';
-import { join, extname, parse as parsePath, basename } from 'path';
-import { spawn } from 'child_process';
+import { join, extname, parse as parsePath, basename, dirname as pathDirname } from 'path';
+import { spawn, spawnSync } from 'child_process';
 import ffmpegPath from 'ffmpeg-static';
 import crypto from 'crypto';
 import { getTitleBySlug } from '../services/scanner.js';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
-import { dirname } from 'path';
 import { tmpdir } from 'os';
 
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const __dirname = pathDirname(__filename);
 
 const router = express.Router();
 
@@ -36,10 +35,10 @@ function getLibraryPath() {
  * Generate a cache file path based on source path + size + mtime.
  * Cache invalidates automatically when the source file changes.
  */
-function getTranscodeCachePath(videoPath, stat) {
+function getTranscodeCachePath(videoPath, stat, quality) {
   const key = crypto
     .createHash('md5')
-    .update(videoPath + stat.size + stat.mtimeMs)
+    .update(videoPath + stat.size + stat.mtimeMs + (quality || 'auto'))
     .digest('hex');
   return join(TRANSCODE_CACHE_DIR, `${key}.mp4`);
 }
@@ -77,9 +76,92 @@ function resolveFfmpegPath() {
     }
   } catch { /* ignore */ }
 
-  // 3. No usable FFmpeg found
+  // 3. Check PATH for ffmpeg (covers WinGet/shim installs)
+  try {
+    const isWin = process.platform === 'win32';
+    const cmd = isWin ? 'where.exe' : 'which';
+    const result = spawnSync(cmd, ['ffmpeg'], { encoding: 'utf-8' });
+    const pathBin = (result.stdout || '').split('\n')[0]?.trim().replace(/^.*?: /, '');
+    if (pathBin && existsSync(pathBin)) {
+      console.log(`✅ Using FFmpeg from PATH: ${pathBin}`);
+      return cachedFfmpegPath = pathBin;
+    }
+  } catch (e) { console.log(e) }
+
+  // 4. No usable FFmpeg found
   console.error('❌ FFmpeg not found. Add "ffmpegPath" to config.json or install FFmpeg.');
   return cachedFfmpegPath = null;
+}
+
+/**
+ * Detect the best available H.264 encoder for transcoding.
+ * Priority: NVENC (NVIDIA) > QSV (Intel) > AMF (AMD) > libx264 (CPU).
+ * Caches the result so we don't probe on every request.
+ */
+let cachedEncoder = null;
+function detectEncoder() {
+  if (cachedEncoder) return cachedEncoder;
+
+  const ffmpegBin = resolveFfmpegPath();
+  if (!ffmpegBin) {
+    cachedEncoder = { type: 'cpu', args: ['-c:v', 'libx264', '-preset', 'superfast', '-crf', '23'] };
+    return cachedEncoder;
+  }
+
+  try {
+    const result = spawnSync(ffmpegBin, ['-hide_banner', '-encoders'], { encoding: 'utf-8' });
+    const encoders = result.stdout || '';
+
+    if (encoders.includes('h264_nvenc')) {
+      console.log('🚀 Detected hardware encoder: h264_nvenc (NVIDIA GPU)');
+      cachedEncoder = { type: 'nvenc', args: ['-c:v', 'h264_nvenc', '-preset', 'p5', '-cq:v', '23', '-b:v', '0'] };
+    } else if (encoders.includes('h264_qsv')) {
+      console.log('🚀 Detected hardware encoder: h264_qsv (Intel Quick Sync)');
+      cachedEncoder = { type: 'qsv', args: ['-c:v', 'h264_qsv', '-global_quality', '23', '-b:v', '0'] };
+    } else if (encoders.includes('h264_amf')) {
+      console.log('🚀 Detected hardware encoder: h264_amf (AMD GPU)');
+      cachedEncoder = { type: 'amf', args: ['-c:v', 'h264_amf', '-quality', 'balanced', '-quality', '23'] };
+    } else {
+      console.log('⚠️  No hardware encoder detected — falling back to libx264 (CPU)');
+      cachedEncoder = { type: 'cpu', args: ['-c:v', 'libx264', '-preset', 'superfast', '-crf', '23'] };
+    }
+  } catch {
+    console.log('⚠️  Hardware encoder probe failed — falling back to libx264 (CPU)');
+    cachedEncoder = { type: 'cpu', args: ['-c:v', 'libx264', '-preset', 'superfast', '-crf', '23'] };
+  }
+
+  return cachedEncoder;
+}
+
+/**
+ * Quality profiles for transcoding. Each profile adjusts the encoder
+ * settings and output resolution. The browser will use the selected
+ * quality for playback — user can switch in the player settings menu.
+ */
+const QUALITY_PROFILES = {
+  high:   { label: '1080p', height: 1080, crf: { nvenc: 23, qsv: 23, amf: 23, cpu: 23 } },
+  medium: { label: '720p',  height: 720,  crf: { nvenc: 24, qsv: 24, amf: 24, cpu: 24 } },
+  low:    { label: '480p',  height: 480,  crf: { nvenc: 26, qsv: 26, amf: 26, cpu: 26 } },
+  auto:   { label: 'Auto',  height: 0,   crf: { nvenc: 24, qsv: 24, amf: 24, cpu: 24 } },
+};
+
+/**
+ * Build FFmpeg encoder args for a given quality profile.
+ */
+function getEncoderArgs(quality) {
+  const encoder = detectEncoder();
+  const profile = QUALITY_PROFILES[quality] || QUALITY_PROFILES.auto;
+  const crf = profile.crf[encoder.type] || 23;
+
+  if (encoder.type === 'nvenc') {
+    return ['-c:v', 'h264_nvenc', '-preset', 'p5', '-cq:v', String(crf), '-b:v', '0'];
+  } else if (encoder.type === 'qsv') {
+    return ['-c:v', 'h264_qsv', '-global_quality', String(crf), '-b:v', '0'];
+  } else if (encoder.type === 'amf') {
+    return ['-c:v', 'h264_amf', '-quality', 'balanced', '-quality', String(crf)];
+  } else {
+    return ['-c:v', 'libx264', '-preset', 'superfast', '-crf', String(crf)];
+  }
 }
 
 // MIME types for video files
@@ -112,18 +194,18 @@ function needsTranscoding(ext) {
  * in an MP4 container. Uses fragmented MP4 with empty moov for progressive
  * playback. Caches the result so repeat requests get full range/seek support.
  */
-function transcodeAndStream(req, res, videoPath, stat) {
+function transcodeAndStream(req, res, videoPath, stat, quality) {
   const ffmpegBin = resolveFfmpegPath();
   if (!ffmpegBin) {
     return res.status(500).json({ success: false, error: 'FFmpeg not available for transcoding. Set "ffmpegPath" in config.json or install FFmpeg.' });
   }
 
-  const cachePath = getTranscodeCachePath(videoPath, stat);
+  const cachePath = getTranscodeCachePath(videoPath, stat, quality);
 
   // Serve from cache if the transcoded file already exists
   if (existsSync(cachePath)) {
     const cacheStat = statSync(cachePath);
-    const range = req.headers.range;
+    const {range} = req.headers;
 
     if (range) {
       const parts = range.replace(/bytes=/, '').split('-');
@@ -158,29 +240,39 @@ function transcodeAndStream(req, res, videoPath, stat) {
 
   const tmpPath = `${cachePath}.tmp`;
 
+  const profile = QUALITY_PROFILES[quality] || QUALITY_PROFILES.auto;
+  const encoder = detectEncoder();
+  const encoderArgs = getEncoderArgs(quality);
+  const scaleFilter = profile.height > 0
+    ? `scale=-2:${profile.height},format=yuv420p`
+    : `scale=-2:720,format=yuv420p`;
+
   const args = [
     '-i', videoPath,
     '-map', '0:v:0',
     '-map', '0:a:0',
     '-map', '0:s?',
-    '-c:v', 'libx264',
-    '-preset', 'veryfast',
-    '-crf', '23',
+    ...encoderArgs,
     '-pix_fmt', 'yuv420p',
+    '-vf', scaleFilter,
     '-c:a', 'aac',
     '-b:a', '128k',
-    '-c:s', 'mov_text',
+    '-sn',
     '-f', 'mp4',
     '-movflags', 'frag_keyframe+empty_moov',
+    '-fflags', '+genpts',
     'pipe:1'
   ];
 
   const ffmpeg = spawn(ffmpegBin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
   const cacheWriteStream = createWriteStream(tmpPath);
 
+  // During on-the-fly transcoding we CANNOT honor Range requests (FFmpeg pipes
+  // from the beginning). Do NOT advertise Accept-Ranges so the browser won't
+  // send seeking requests that result in full restarts. Once cached, the
+  // cache-serve path above does handle Range properly.
   res.status(200).set({
     'Content-Type': 'video/mp4',
-    'Accept-Ranges': 'bytes',
     'Cache-Control': 'no-cache',
   });
 
@@ -325,14 +417,17 @@ router.get('/:slug/:season/:file', async (req, res) => {
     return res.status(500).json({ success: false, error: 'Failed to stat video file' });
   }
   
-  const fileSize = stat.size;
+   const fileSize = stat.size;
   const ext = extname(file).toLowerCase();
   const mimeType = VIDEO_MIME_TYPES[ext] || 'application/octet-stream';
-  const range = req.headers.range;
+  const {range} = req.headers;
+
+  // Quality selection (for transcoded formats)
+  const quality = req.query.quality || 'auto';
 
   // Transcode browser-incompatible formats (e.g. MKV with H.264) to MP4
   if (needsTranscoding(ext)) {
-    return transcodeAndStream(req, res, videoPath, stat);
+    return transcodeAndStream(req, res, videoPath, stat, quality);
   }
   
   if (range) {
@@ -584,7 +679,11 @@ router.get('/:slug/:season/:file/embedded-subs', async (req, res) => {
 });
 
 // GET /api/stream/:slug/:season/:file/embedded-subs/:trackIndex
-// Serves a single embedded subtitle track as WebVTT
+// Serves a single embedded subtitle track as raw ASS (.ass) for client-side
+// rendering via SubtitlesOctopus (libass-wasm). Preserves all ASS features
+// including \pos, \move, \an, colors, fonts, and karaoke effects.
+// Note: Content-Type is vtt so the HTML <track> element accepts it, but the
+// content is actually ASS which SubtitlesOctopus will parse directly.
 router.get('/:slug/:season/:file/embedded-subs/:trackIndex', async (req, res) => {
   const { slug, season, file, trackIndex } = req.params;
   const result = await resolveVideoPath(slug, season, file);
@@ -592,35 +691,98 @@ router.get('/:slug/:season/:file/embedded-subs/:trackIndex', async (req, res) =>
 
   const { videoPath } = result;
   const ffmpegBin = resolveFfmpegPath();
-  if (!ffmpegBin) return res.status(500).json({ success: false, error: 'FFmpeg not available' });
+  if (!ffmpegBin) {
+    return res.status(500).json({ success: false, error: 'FFmpeg not available for subtitle extraction.' });
+  }
 
   res.set({ 'Content-Type': 'text/vtt; charset=utf-8' });
 
   const ffmpeg = spawn(ffmpegBin, [
     '-i', videoPath,
     '-map', `0:${trackIndex}`,
-    '-f', 'webvtt',
+    '-c:s', 'ass',
+    '-f', 'ass',
     'pipe:1'
   ], { stdio: ['ignore', 'pipe', 'pipe'] });
 
   ffmpeg.stdout.pipe(res);
 
-  ffmpeg.stderr.on('data', (data) => {
-    console.log(`FFmpeg [subtitle ${trackIndex}]: ${data}`);
-  });
-
-  ffmpeg.on('error', (err) => {
-    console.error('FFmpeg subtitle extraction error:', err.message);
-    if (!res.headersSent) res.status(500).json({ success: false, error: 'Subtitle extraction failed' });
-    else res.end();
-  });
-
+  ffmpeg.stderr.on('data', () => {});
+  ffmpeg.on('error', () => res.end());
   ffmpeg.on('close', (code) => {
     res.end();
     if (code !== 0) console.error(`FFmpeg subtitle extraction exited with code ${code}`);
   });
 
   req.on('close', () => ffmpeg.kill());
+});
+
+// GET /api/stream/:slug/:season/:file/embedded-fonts
+// Returns list of embedded fonts (MKV attachments) as base64 data URLs for
+// use with SubtitlesOctopus/libass. Needed for ASS subtitles that reference
+// specific fonts (e.g., Japanese fonts for signs).
+router.get('/:slug/:season/:file/embedded-fonts', async (req, res) => {
+  const { slug, season, file } = req.params;
+  const result = await resolveVideoPath(slug, season, file);
+  if (result.error) return res.status(result.status).json({ success: false, error: result.error });
+
+  const { videoPath } = result;
+  const ffmpegBin = resolveFfmpegPath();
+  if (!ffmpegBin) {
+    return res.status(500).json({ success: false, error: 'FFmpeg not available for font extraction.' });
+  }
+
+  // Probe for attachment streams (fonts) using stderr
+  const probe = spawnSync(ffmpegBin, [
+    '-i', videoPath,
+    '-hide_banner',
+  ], { encoding: 'utf-8' });
+
+  const fonts = [];
+  const stderr = probe.stderr || '';
+  const lines = stderr.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const attMatch = lines[i].match(/Stream #0:(\d+)\(.*?\): Attachment:/);
+    if (attMatch) {
+      const idx = parseInt(attMatch[1], 10);
+      for (let j = i + 1; j < Math.min(i + 4, lines.length); j++) {
+        const fn = lines[j].match(/filename\s*:\s*(.+)/);
+        if (fn) {
+          fonts.push({ index: idx, filename: fn[1].trim() });
+          break;
+        }
+      }
+    }
+  }
+
+  if (fonts.length === 0) {
+    return res.json({ success: true, fonts: [] });
+  }
+
+  // Extract each font as base64 data URL
+  const results = [];
+  for (const font of fonts) {
+    try {
+      const ff = spawnSync(ffmpegBin, [
+        '-i', videoPath,
+        '-map', `0:${font.index}`,
+        '-f', 'data',
+        'pipe:1'
+      ], { encoding: null });  // binary mode
+
+      if (ff.status === 0 && ff.stdout) {
+        const base64 = ff.stdout.toString('base64');
+        results.push({
+          filename: font.filename,
+          dataUrl: `data:application/octet-stream;base64,${base64}`
+        });
+      }
+    } catch (err) {
+      console.warn(`Failed to extract font ${font.filename}:`, err.message);
+    }
+  }
+
+  res.json({ success: true, fonts: results });
 });
 
 export default router;
