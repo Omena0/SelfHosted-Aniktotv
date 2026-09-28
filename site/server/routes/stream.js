@@ -37,18 +37,18 @@ function resolveFfmpegPath() {
   try {
     const configPath = join(__dirname, '../../../config.json');
     const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-    if (config.ffmpegPath && existsSync(config.ffmpegPath)) return cachedFfmpegPath = config.ffmpegPath;
+    if (config.ffmpegPath && existsSync(config.ffmpegPath) && isFfmpegBinary(config.ffmpegPath)) return cachedFfmpegPath = config.ffmpegPath;
   } catch { /* Use the bundled binary or PATH. */ }
   try {
     // createRequire works in this ES module and resolves ffmpeg-static from the server.
     const ffmpegPath = require.resolve('ffmpeg-static');
-    if (existsSync(ffmpegPath) && (process.platform === 'win32' || !ffmpegPath.endsWith('.exe'))) return cachedFfmpegPath = ffmpegPath;
+    if (existsSync(ffmpegPath) && isFfmpegBinary(ffmpegPath)) return cachedFfmpegPath = ffmpegPath;
   } catch { /* ffmpeg-static is optional. */ }
   try {
     const isWin = process.platform === 'win32';
     const result = spawnSync(isWin ? 'where.exe' : 'which', ['ffmpeg'], { encoding: 'utf-8' });
     const pathBin = (result.stdout || '').split(/\r?\n/)[0]?.trim();
-    if (pathBin && existsSync(pathBin)) return cachedFfmpegPath = pathBin;
+    if (pathBin && existsSync(pathBin) && isFfmpegBinary(pathBin)) return cachedFfmpegPath = pathBin;
   } catch { /* Report the actionable failure below. */ }
   console.error('FFmpeg not found. Configure ffmpegPath or install FFmpeg.');
   cachedFfmpegPath = null;
