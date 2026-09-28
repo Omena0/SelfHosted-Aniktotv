@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { api } from '../lib/api';
 import SubtitlesOctopus from 'libass-wasm';
+import type Hls from 'hls.js';
 
 interface CustomVideoPlayerProps {
   src: string;
@@ -62,10 +63,11 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
   onEnded,
   onLoadedMetadata,
 }) => {
-   // Determine whether this file needs transcoding (MKV, AVI, etc.)
+  // Determine whether this file needs transcoding (MKV, AVI, etc.)
   // or can be played natively (MP4, M4V, WEBM).
   const fileExt = episodeFile ? episodeFile.slice(episodeFile.lastIndexOf('.')).toLowerCase() : src.slice(src.lastIndexOf('.')).toLowerCase();
   const isNativePlayable = ['.mp4', '.webm', '.m4v'].includes(fileExt);
+  const isHls = !isNativePlayable;
 
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -86,6 +88,7 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
   const [showSpeedMenu, setShowSpeedMenu] = useState<boolean>(false);
   const [controlsVisible, setControlsVisible] = useState<boolean>(true);
   const [mediaError, setMediaError] = useState<string | null>(null);
+  const [isTouchDevice, setIsTouchDevice] = useState<boolean>(false);
   const [embeddedSubTracks, setEmbeddedSubTracks] = useState<Array<{ index: number; language: string; label: string; isDefault?: boolean }>>([]);
   // Server-probed duration for accurate seek-bar when transcoding (browser can't
   // determine full duration during progressive streaming). Prefixed with "d" to
@@ -95,6 +98,7 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
   // SubtitlesOctopus (libass-wasm) instance for rendering ASS subtitles
   // with full feature support (\pos, \move, fonts, karaoke, etc.)
   const subOctopusRef = useRef<SubtitlesOctopus | null>(null);
+  const hlsRef = useRef<Hls | null>(null);
   const [availableFonts, setAvailableFonts] = useState<Record<string, string>>({});
 
   // Quality selection for transcoded streams.
@@ -114,12 +118,10 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
 
   const hideControlsTimer = useRef<NodeJS.Timeout | null>(null);
 
-  // Build the actual video URL — appends quality param for transcoded formats
   const videoSrc = React.useMemo(() => {
-    if (!src) return '';
-    const separator = src.includes('?') ? '&' : '?';
-    return src.includes('quality=') ? src : `${src}${separator}quality=${encodeURIComponent(selectedQuality)}`;
-  }, [src, selectedQuality]);
+    if (!src || isNativePlayable) return src;
+    return src.replace(/\/hls\/[^/?]+(?=\?|$)/, `/hls/${encodeURIComponent(selectedQuality)}`);
+  }, [src, isNativePlayable, selectedQuality]);
 
   // Auto-hide controls after inactivity
   const handleMouseMove = useCallback(() => {
@@ -135,16 +137,39 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
   }, [isPlaying]);
 
   useEffect(() => {
+    const mq = window.matchMedia('(hover: none), (pointer: coarse)');
+    setIsTouchDevice(mq.matches);
+  }, []);
+
+  useEffect(() => {
+    previewVideoSrcSetRef.current = false;
+    setCurrentTime(0);
+    setDuration(0);
+    setDeclaredDuration(0);
+    setMediaError(null);
+    videoRef.current?.pause();
+    if (videoRef.current) videoRef.current.currentTime = 0;
+    if (previewVideoRef.current) {
+      previewVideoRef.current.pause();
+      previewVideoRef.current.removeAttribute('src');
+      previewVideoRef.current.load();
+    }
+  }, [src]);
+
+  useEffect(() => {
     return () => {
       if (hideControlsTimer.current) clearTimeout(hideControlsTimer.current);
       if (subOctopusRef.current) {
         subOctopusRef.current.dispose();
         subOctopusRef.current = null;
       }
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
     };
   }, []);
 
-  // CC Tracks State
   const [showCcMenu, setShowCcMenu] = useState<boolean>(false);
   const [selectedLabel, setSelectedLabel] = useState<string | null>(null);
 
@@ -180,6 +205,75 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
     return () => { clearInterval(interval); clearTimeout(timeout); };
   }, [videoSrc, isNativePlayable, detectNativeTracks]);
 
+  // HLS.js initialization for transcoded streams
+  useEffect(() => {
+    if (!isHls || !videoRef.current || !videoSrc) return;
+    const video = videoRef.current;
+    const resumePosition = video.currentTime > 0 ? video.currentTime : initialPosition;
+    let active = true;
+    let hls: Hls | null = null;
+    let nativeMetadataHandler: (() => void) | null = null;
+    setMediaError(null);
+
+    import('hls.js').then(({ default: HlsPlayer }) => {
+      if (!active) return;
+      if (HlsPlayer.isSupported()) {
+        hls = new HlsPlayer({
+          startPosition: resumePosition,
+          maxBufferLength: 30,
+          maxMaxBufferLength: 60,
+          backBufferLength: 30,
+          enableWorker: true,
+          manifestLoadingMaxRetry: 4,
+          levelLoadingMaxRetry: 4,
+          fragLoadingMaxRetry: 4,
+        });
+        hlsRef.current = hls;
+
+        hls.on(HlsPlayer.Events.MANIFEST_PARSED, () => {
+          if (resumePosition > 0) video.currentTime = resumePosition;
+        });
+
+        hls.on(HlsPlayer.Events.ERROR, (_event, data) => {
+          if (!data.fatal) return;
+          if (data.type === HlsPlayer.ErrorTypes.MEDIA_ERROR) {
+            hls?.recoverMediaError();
+          } else if (data.type === HlsPlayer.ErrorTypes.NETWORK_ERROR) {
+            hls?.startLoad();
+          } else {
+            setMediaError('HLS streaming failed. Please reload.');
+          }
+        });
+
+        hls.loadSource(videoSrc);
+        hls.attachMedia(video);
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = videoSrc;
+        nativeMetadataHandler = () => {
+          if (resumePosition > 0) video.currentTime = resumePosition;
+        };
+        video.addEventListener('loadedmetadata', nativeMetadataHandler);
+      } else {
+        setMediaError('This browser cannot play HLS video.');
+      }
+    }).catch(() => {
+      if (active) setMediaError('HLS streaming failed to initialize.');
+    });
+
+    return () => {
+      active = false;
+      if (nativeMetadataHandler) {
+        video.removeEventListener('loadedmetadata', nativeMetadataHandler);
+        video.removeAttribute('src');
+        video.load();
+      }
+      if (hls) {
+        hls.destroy();
+        if (hlsRef.current === hls) hlsRef.current = null;
+      }
+    };
+  }, [videoSrc, isHls, initialPosition]);
+
   // Subtitle import state
   const subtitleInputRef = useRef<HTMLInputElement>(null);
   const [importedSubUrl, setImportedSubUrl] = useState<string | null>(null); // blob URL for native <track>
@@ -187,6 +281,45 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
   const [importedSubLabel, setImportedSubLabel] = useState<string>('');
   const [subSaveStatus, setSubSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [diskSubtitles, setDiskSubtitles] = useState<Array<{ fileName: string; ext: string }>>([]);
+  const [skipSegments, setSkipSegments] = useState<Array<{ title: string; type: string; start: number; end: number }>>([]);
+  const [autoSkipEnabled, setAutoSkipEnabled] = useState<boolean>(false);
+  const lastAutoSkippedRef = useRef<string | null>(null);
+  const firstVideoClickRef = useRef<{ time: number; x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    if (!slug || !season || !episodeFile) {
+      setSkipSegments([]);
+      return;
+    }
+    let active = true;
+    setSkipSegments([]);
+    lastAutoSkippedRef.current = null;
+    api.getVideoChapters(slug, season || '', episodeFile || '')
+      .then((segments) => { if (active) setSkipSegments(segments); })
+      .catch(() => { if (active) setSkipSegments([]); });
+    return () => { active = false; };
+  }, [slug, season, episodeFile]);
+
+  useEffect(() => {
+    if (!autoSkipEnabled || !videoRef.current) return;
+    const video = videoRef.current;
+    const handleAutoSkip = () => {
+      const segment = skipSegments.find((item) =>
+        ['opening', 'ending', 'prologue'].includes(item.type) && video.currentTime >= item.start && video.currentTime < item.end
+      );
+      if (!segment) {
+        lastAutoSkippedRef.current = null;
+        return;
+      }
+      const key = `${segment.type}:${segment.start}:${segment.end}`;
+      if (lastAutoSkippedRef.current === key) return;
+      lastAutoSkippedRef.current = key;
+      const totalDuration = duration || (Number.isFinite(video.duration) ? video.duration : segment.end);
+      video.currentTime = Math.min(totalDuration, segment.end + 0.25);
+    };
+    video.addEventListener('timeupdate', handleAutoSkip);
+    return () => video.removeEventListener('timeupdate', handleAutoSkip);
+  }, [autoSkipEnabled, skipSegments, duration]);
 
   // Load disk subtitles list when episode changes
   useEffect(() => {
@@ -458,9 +591,14 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
     }
   };
 
-  // Double Click Gesture: Toggle / Exit Fullscreen
+  // Fullscreen gesture is bound to the video element only and requires a quick,
+  // stationary double-click to avoid triggering while using nearby controls.
   const handleDoubleClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
+    const firstClick = firstVideoClickRef.current;
+    const elapsed = e.nativeEvent.timeStamp - (firstClick?.time || 0);
+    const moved = firstClick && Math.hypot(e.clientX - firstClick.x, e.clientY - firstClick.y) > 24;
+    if (!firstClick || elapsed > 260 || moved) return;
     if (!containerRef.current) return;
 
     if (document.fullscreenElement) {
@@ -522,19 +660,8 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
     if (!seekBarRef.current || !videoRef.current || !duration) return;
     const rect = seekBarRef.current.getBoundingClientRect();
     const offsetX = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
-    let newTime = (offsetX / rect.width) * duration;
-
-    // For transcoded/progressive streams, clamp seek to the buffered range
-    // to prevent "jump backwards" when clicking unbuffered regions.
-    const video = videoRef.current;
-    if (video.buffered && video.buffered.length > 0) {
-      const bufferedEnd = video.buffered.end(video.buffered.length - 1);
-      if (newTime > bufferedEnd) {
-        newTime = Math.min(newTime, bufferedEnd);
-      }
-    }
-
-    video.currentTime = newTime;
+    const newTime = (offsetX / rect.width) * duration;
+    videoRef.current.currentTime = newTime;
     setCurrentTime(newTime);
   };
 
@@ -601,7 +728,7 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
     setHoverPositionX(offsetX);
 
     // Lazily set the preview video source only when first needed for hover preview.
-    if (previewVideoRef.current) {
+    if (isNativePlayable && previewVideoRef.current) {
       if (!previewVideoSrcSetRef.current) {
         previewVideoRef.current.src = src;
         previewVideoSrcSetRef.current = true;
@@ -636,10 +763,13 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
       onMouseMove={handleMouseMove}
       onMouseLeave={() => isPlaying && setControlsVisible(false)}
       onClick={() => {
-        // Single click anywhere to toggle controls visibility (will be stopped by controls bar)
-        setControlsVisible(!controlsVisible);
+        // Desktop: click to play/pause; Mobile: click to toggle controls
+        if (isTouchDevice) {
+          setControlsVisible(!controlsVisible);
+        } else {
+          togglePlay();
+        }
       }}
-      onDoubleClick={handleDoubleClick}
       className={`relative group bg-black overflow-hidden select-none font-sans flex items-center justify-center ${
         isFullscreen ? 'w-screen h-screen fixed inset-0 z-50' : 'w-full aspect-video rounded-2xl border-none outline-none shadow-2xl'
       }`}
@@ -656,7 +786,7 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
       {/* Primary Video Element */}
       <video
         ref={videoRef}
-        src={videoSrc}
+        src={isNativePlayable ? videoSrc : undefined}
         preload="metadata"
         playsInline
         onLoadedMetadata={handleMetadataLoaded}
@@ -671,6 +801,10 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
           setIsPlaying(false);
           if (videoRef.current && onEnded) onEnded(videoRef.current.currentTime, videoRef.current.duration);
         }}
+         onClick={(e) => {
+           if (e.detail === 1) firstVideoClickRef.current = { time: e.nativeEvent.timeStamp, x: e.clientX, y: e.clientY };
+         }}
+         onDoubleClick={handleDoubleClick}
          className="w-full h-full object-contain"
        >
          {/* Injected subtitle track from user import */}
@@ -718,9 +852,23 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
           onMouseLeave={handleSeekBarMouseLeave}
           className="relative w-full h-2 rounded bg-white/20 hover:h-3 transition-all cursor-pointer flex items-center group/seek"
         >
+          {skipSegments.map((segment, index) => {
+            if (!duration) return null;
+            const left = (segment.start / duration) * 100;
+            const width = Math.max(((segment.end - segment.start) / duration) * 100, 0.25);
+            const colorClass = segment.type === 'opening' ? 'bg-green-400/70' : segment.type === 'ending' ? 'bg-amber-400/70' : segment.type === 'prologue' ? 'bg-purple-400/70' : segment.type === 'episode' ? 'bg-sky-300/70' : 'bg-slate-300/70';
+            return (
+              <div
+                key={`${segment.start}-${index}`}
+                className={`absolute top-0 h-full z-10 ${colorClass}`}
+                style={{ left: `${left}%`, width: `${width}%` }}
+                title={`${segment.title} (${formatTime(segment.start)}–${formatTime(segment.end)})`}
+              />
+            );
+          })}
           {/* Played Progress Bar */}
           <div
-            className="h-full bg-[#209cee] rounded relative flex items-center"
+            className="h-full bg-[#209cee] rounded relative z-0 flex items-center"
             style={{ width: `${progressPercent}%` }}
           >
             {/* Seek Handle Knob */}
@@ -737,7 +885,7 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
                 ref={previewCanvasRef}
                 className={`w-36 h-20 rounded bg-black object-cover ${hasPreviewFrame ? 'block' : 'hidden'}`}
               />
-              {!hasPreviewFrame && (
+              {isNativePlayable && !hasPreviewFrame && (
                 <div className="w-36 h-20 rounded bg-[#142030] flex items-center justify-center text-[10px] text-slate-400 animate-pulse">
                   Loading Frame...
                 </div>
@@ -795,6 +943,18 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
 
           {/* RIGHT GROUP: Seek -10s, Seek +10s, CC, Settings, PiP, Fullscreen */}
           <div className="flex items-center gap-2 sm:gap-3">
+            <button
+              onClick={() => setAutoSkipEnabled((enabled) => {
+                lastAutoSkippedRef.current = null;
+                return !enabled;
+              })}
+              disabled={!skipSegments.some((segment) => ['opening', 'ending', 'prologue'].includes(segment.type))}
+              className={`p-1.5 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${autoSkipEnabled ? 'text-[#209cee] bg-white/10' : 'text-slate-300 hover:text-white hover:bg-white/10'}`}
+              title={autoSkipEnabled ? 'Turn off automatic chapter skipping' : 'Turn on automatic chapter skipping'}
+              aria-pressed={autoSkipEnabled}
+            >
+              <span className="flex items-center gap-1"><RotateCw className="w-4 h-4" /><span className="text-[10px] font-bold">Auto</span></span>
+            </button>
             {/* Seek -10s - Hidden on mobile when NOT fullscreen */}
             <button
               onClick={() => skipTime(-10)}
@@ -989,8 +1149,7 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
                     </button>
                   ))}
 
-                  {/* Quality Selector */}
-                  <div className="border-t border-[#1a2a3e] pt-1 mt-1">
+                  {isHls && <div className="border-t border-[#1a2a3e] pt-1 mt-1">
                     <div className="text-[10px] font-bold uppercase text-slate-400 px-2 py-1">
                       Quality
                     </div>
@@ -1000,12 +1159,6 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
                         onClick={() => {
                           setSelectedQuality(q.value);
                           setShowSpeedMenu(false);
-                          // Restart video with new quality
-                          if (videoRef.current) {
-                            const currentPos = videoRef.current.currentTime;
-                            videoRef.current.load();
-                            videoRef.current.currentTime = currentPos;
-                          }
                         }}
                         className={`w-full text-left px-2.5 py-1 rounded font-bold transition-colors ${
                           selectedQuality === q.value
@@ -1016,7 +1169,7 @@ export const CustomVideoPlayer: React.FC<CustomVideoPlayerProps> = ({
                         {q.label}
                       </button>
                     ))}
-                  </div>
+                  </div>}
                 </div>
               )}
             </div>

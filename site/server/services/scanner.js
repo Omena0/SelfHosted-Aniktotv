@@ -1,7 +1,8 @@
 // Scanner service - walks anime/ folder and builds library index
-import { readdirSync, statSync, existsSync, readFileSync, writeFileSync } from 'fs';
-import { join, extname, parse, dirname } from 'path';
+import { readdirSync, statSync, existsSync, realpathSync, readFileSync, writeFileSync, createWriteStream } from 'fs';
+import { join, resolve, relative, sep, isAbsolute, extname, parse, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import https from 'https';
 import { fetchMetadataByName } from './anilistClient.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -383,20 +384,23 @@ export function getLibraryIndex(libraryPath) {
  */
 export async function saveMatchedMetadata(slug, anilistMedia, libraryPath, relFolderPath) {
   const indexEntry = libraryIndex.find(t => t.slug === slug);
-  const relPath = relFolderPath || (indexEntry ? (indexEntry.relFolderPath || indexEntry.folderName) : slug);
-  const titlePath = join(libraryPath, relPath);
-
-  if (!existsSync(titlePath)) {
-    throw new Error(`Anime folder not found on disk at ${titlePath}`);
+  if (!indexEntry && !relFolderPath) throw new Error('Anime title is not in the local library');
+  const relPath = indexEntry ? (indexEntry.relFolderPath || indexEntry.folderName) : relFolderPath;
+  const libraryRoot = realpathSync(resolve(libraryPath));
+  const titlePath = realpathSync(resolve(libraryRoot, relPath));
+  const titleRelativePath = relative(libraryRoot, titlePath);
+  if (!titleRelativePath || titleRelativePath === '..' || titleRelativePath.startsWith(`..${sep}`) || isAbsolute(titleRelativePath)) {
+    throw new Error('Anime folder is outside the configured library');
   }
+  if (!anilistMedia || !Number.isSafeInteger(Number(anilistMedia.id))) throw new Error('Invalid anime metadata');
 
   const metaPath = join(titlePath, 'meta.json');
-  const folderName = indexEntry ? indexEntry.folderName : slug;
+  const folderName = indexEntry?.folderName || basename(relPath);
 
   const meta = {
     slug,
     folderName,
-    anilistId: anilistMedia.id,
+    anilistId: Number(anilistMedia.id),
     title: {
       romaji: anilistMedia.title?.romaji || folderName,
       english: anilistMedia.title?.english || anilistMedia.title?.romaji || folderName
@@ -406,8 +410,8 @@ export async function saveMatchedMetadata(slug, anilistMedia, libraryPath, relFo
     format: anilistMedia.format || 'TV',
     status: anilistMedia.status || 'FINISHED',
     totalEpisodesOnAniList: anilistMedia.episodes,
-    poster: anilistMedia.coverImage?.large ? 'poster.jpg' : null,
-    banner: anilistMedia.bannerImage ? 'banner.jpg' : null,
+    poster: null,
+    banner: null,
     lastAniListSync: new Date().toISOString(),
     seasons: indexEntry?.seasons || []
   };
@@ -428,6 +432,7 @@ export async function saveMatchedMetadata(slug, anilistMedia, libraryPath, relFo
     try {
       const bannerPath = join(titlePath, 'banner.jpg');
       await downloadImage(anilistMedia.bannerImage, bannerPath);
+      meta.banner = 'banner.jpg';
       meta.banner = 'banner.jpg';
     } catch (err) {
       console.warn(`Failed to download banner for ${slug}:`, err.message);
@@ -458,22 +463,46 @@ export async function saveMatchedMetadata(slug, anilistMedia, libraryPath, relFo
  */
 function downloadImage(url, destPath) {
   return new Promise((resolve, reject) => {
-    import('https').then(({ default: https }) => {
-      https.get(url, (res) => {
-        if (res.statusCode === 200) {
-          const fileStream = import('fs').then(({ createWriteStream }) => {
-            const stream = createWriteStream(destPath);
-            res.pipe(stream);
-            stream.on('finish', () => {
-              stream.close();
-              resolve();
-            });
-          });
-        } else {
-          reject(new Error(`Server returned status code ${res.statusCode}`));
+    let imageUrl;
+    try { imageUrl = new URL(url); } catch { reject(new Error('Invalid image URL')); return; }
+    if (imageUrl.protocol !== 'https:' || imageUrl.hostname !== 's4.anilist.co') {
+      reject(new Error('Image URL must use AniList image hosting'));
+      return;
+    }
+
+    const request = https.get(imageUrl, { timeout: 10000 }, (response) => {
+      if (response.statusCode !== 200) {
+        response.resume();
+        reject(new Error(`Image server returned status ${response.statusCode}`));
+        return;
+      }
+      const maxBytes = 15 * 1024 * 1024;
+      let downloadedBytes = 0;
+      let settled = false;
+      const stream = createWriteStream(destPath);
+      response.on('data', (chunk) => {
+        downloadedBytes += chunk.length;
+        if (downloadedBytes > maxBytes && !settled) {
+          settled = true;
+          response.destroy();
+          stream.destroy();
+          reject(new Error('Image exceeds 15 MB limit'));
         }
-      }).on('error', reject);
+      });
+      stream.on('finish', () => {
+        if (!settled) { settled = true; resolve(); }
+      });
+      stream.on('error', (error) => {
+        if (!settled) { settled = true; reject(error); }
+      });
+      response.on('error', (error) => {
+        stream.destroy();
+        if (!settled) { settled = true; reject(error); }
+      });
+      response.pipe(stream);
     });
+    request.on('timeout', () => request.destroy(new Error('Image request timed out')));
+    request.on('error', reject);
   });
 }
 

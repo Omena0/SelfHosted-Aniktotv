@@ -1,6 +1,6 @@
 import express from 'express';
-import { existsSync, readFileSync, createReadStream } from 'fs';
-import { join, extname } from 'path';
+import { existsSync, realpathSync, readFileSync, createReadStream } from 'fs';
+import { join, relative, isAbsolute, basename, extname } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { getTitleBySlug } from '../services/scanner.js';
@@ -30,6 +30,9 @@ const MIME_TYPES = {
 // GET /api/image/:slug/:filename
 router.get('/:slug/:filename', async (req, res) => {
   const { slug, filename } = req.params;
+  if (!filename || basename(filename) !== filename) return res.status(400).send('Invalid image filename');
+  const ext = extname(filename).toLowerCase();
+  if (!Object.hasOwn(MIME_TYPES, ext)) return res.status(415).send('Unsupported image type');
   const libraryPath = getLibraryPath();
 
   const title = await getTitleBySlug(slug, libraryPath);
@@ -39,12 +42,16 @@ router.get('/:slug/:filename', async (req, res) => {
 
   // Check if image file exists in title directory
   const relPath = title.relFolderPath || title.folderName;
-  const imagePath = join(libraryPath, relPath, filename);
+  let imagePath;
+  try {
+    const titlePath = realpathSync(join(libraryPath, relPath));
+    imagePath = realpathSync(join(titlePath, filename));
+    const relImagePath = relative(titlePath, imagePath);
+    if (!relImagePath || relImagePath.startsWith('..') || isAbsolute(relImagePath)) return res.status(400).send('Invalid image path');
+  } catch { imagePath = null; }
 
-  if (existsSync(imagePath)) {
-    const ext = extname(filename).toLowerCase();
-    const mime = MIME_TYPES[ext] || 'image/jpeg';
-    res.setHeader('Content-Type', mime);
+  if (imagePath && existsSync(imagePath)) {
+    res.setHeader('Content-Type', MIME_TYPES[ext]);
     res.setHeader('Cache-Control', 'public, max-age=86400');
     return createReadStream(imagePath).pipe(res);
   }

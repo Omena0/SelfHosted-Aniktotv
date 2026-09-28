@@ -18,7 +18,7 @@ export const Player: React.FC = () => {
   const lastSavedTimeRef = useRef<number>(0);
 
   // Stream URL helper
-  const streamUrl = slug && season && file ? api.getStreamUrl(slug, season, file) : '';
+  const streamUrl = slug && season && file ? api.getStreamUrl(slug, season, file, 'auto') : '';
 
   // Save progress helper
   const saveProgress = useCallback(
@@ -54,6 +54,7 @@ export const Player: React.FC = () => {
       try {
         setLoading(true);
         setError(null);
+        setInitialPosition(0);
 
         const [detailData, progressData] = await Promise.all([
           api.getAnimeDetail(slug),

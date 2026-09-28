@@ -1,170 +1,108 @@
 import express from 'express';
-import { statSync, createReadStream, createWriteStream, existsSync, writeFileSync, mkdirSync, unlinkSync, renameSync } from 'fs';
-import { join, extname, parse as parsePath, basename, dirname as pathDirname } from 'path';
+import { statSync, realpathSync, createReadStream, existsSync, mkdirSync, unlinkSync, renameSync, readFileSync, writeFileSync } from 'fs';
+import { join, resolve, relative, sep, isAbsolute, extname, parse as parsePath, basename, dirname } from 'path';
 import { spawn, spawnSync } from 'child_process';
-import ffmpegPath from 'ffmpeg-static';
-import crypto from 'crypto';
+import { createRequire } from 'module';
 import { getTitleBySlug } from '../services/scanner.js';
-import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
-import { tmpdir } from 'os';
+import { generateSegmentId, addToCache, accessSegment, beginSegmentUse, endSegmentUse, isGenerating, startGeneration, finishGeneration, enforceSizeLimit, updateAllPriorities } from '../services/cacheManager.js';
 
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = pathDirname(__filename);
+const __dirname = dirname(__filename);
+const require = createRequire(import.meta.url);
 
 const router = express.Router();
+const durationCache = new Map();
+const chapterCache = new Map();
 
-// Cache directory for transcoded video files (avoids re-transcoding on repeat requests)
-const TRANSCODE_CACHE_DIR = join(tmpdir(), 'anistash-transcode');
-if (!existsSync(TRANSCODE_CACHE_DIR)) {
-  mkdirSync(TRANSCODE_CACHE_DIR, { recursive: true });
-}
+// Eight second segments reduce per-segment transcoding and HTTP overhead while
+// keeping seeks responsive enough for on-demand playback.
+const SEGMENT_DURATION = 8;
 
-// Load config to get library path
-function getLibraryPath() {
+async function getLibraryPath() {
   const configPath = join(__dirname, '../../../config.json');
   const config = JSON.parse(readFileSync(configPath, 'utf-8'));
   const lib = config.libraryPath || './anime';
   const projectRoot = join(__dirname, '../../..');
-  return lib.startsWith('.')
-    ? join(projectRoot, lib)
-    : lib;
+  return lib.startsWith('.') ? join(projectRoot, lib) : lib;
 }
 
-/**
- * Generate a cache file path based on source path + size + mtime.
- * Cache invalidates automatically when the source file changes.
- */
-function getTranscodeCachePath(videoPath, stat, quality) {
-  const key = crypto
-    .createHash('md5')
-    .update(videoPath + stat.size + stat.mtimeMs + (quality || 'auto'))
-    .digest('hex');
-  return join(TRANSCODE_CACHE_DIR, `${key}.mp4`);
+function getCacheDir(libraryPath) {
+  return join(libraryPath, '.anistash/cache');
 }
 
-/**
- * Resolve the FFmpeg binary path.
- * Priority: config.json → ffmpeg-static → null.
- * Falls back gracefully when ffmpeg-static returns a binary
- * incompatible with the current platform (e.g. .exe in WSL).
- */
-let cachedFfmpegPath = undefined;
+let cachedFfmpegPath;
 function resolveFfmpegPath() {
   if (cachedFfmpegPath !== undefined) return cachedFfmpegPath;
-
-  // 1. Honour an explicit path in config.json
   try {
     const configPath = join(__dirname, '../../../config.json');
     const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-    if (config.ffmpegPath && existsSync(config.ffmpegPath)) {
-      console.log(`✅ Using FFmpeg from config.json: ${config.ffmpegPath}`);
-      return cachedFfmpegPath = config.ffmpegPath;
-    }
-  } catch { /* ignore */ }
-
-  // 2. Try ffmpeg-static, but reject Windows .exe on non-Windows platforms
+    if (config.ffmpegPath && existsSync(config.ffmpegPath)) return cachedFfmpegPath = config.ffmpegPath;
+  } catch { /* Use the bundled binary or PATH. */ }
   try {
-    const staticPath = ffmpegPath;
-    if (staticPath && existsSync(staticPath)) {
-      if (process.platform !== 'win32' && staticPath.endsWith('.exe')) {
-        console.log('⚠️  ffmpeg-static provided a Windows binary on a non-Windows platform — skipping.');
-      } else {
-        console.log(`✅ Using FFmpeg from ffmpeg-static: ${staticPath}`);
-        return cachedFfmpegPath = staticPath;
-      }
-    }
-  } catch { /* ignore */ }
-
-  // 3. Check PATH for ffmpeg (covers WinGet/shim installs)
+    // createRequire works in this ES module and resolves ffmpeg-static from the server.
+    const ffmpegPath = require.resolve('ffmpeg-static');
+    if (existsSync(ffmpegPath) && (process.platform === 'win32' || !ffmpegPath.endsWith('.exe'))) return cachedFfmpegPath = ffmpegPath;
+  } catch { /* ffmpeg-static is optional. */ }
   try {
     const isWin = process.platform === 'win32';
-    const cmd = isWin ? 'where.exe' : 'which';
-    const result = spawnSync(cmd, ['ffmpeg'], { encoding: 'utf-8' });
-    const pathBin = (result.stdout || '').split('\n')[0]?.trim().replace(/^.*?: /, '');
-    if (pathBin && existsSync(pathBin)) {
-      console.log(`✅ Using FFmpeg from PATH: ${pathBin}`);
-      return cachedFfmpegPath = pathBin;
-    }
-  } catch (e) { console.log(e) }
-
-  // 4. No usable FFmpeg found
-  console.error('❌ FFmpeg not found. Add "ffmpegPath" to config.json or install FFmpeg.');
-  return cachedFfmpegPath = null;
+    const result = spawnSync(isWin ? 'where.exe' : 'which', ['ffmpeg'], { encoding: 'utf-8' });
+    const pathBin = (result.stdout || '').split(/\r?\n/)[0]?.trim();
+    if (pathBin && existsSync(pathBin)) return cachedFfmpegPath = pathBin;
+  } catch { /* Report the actionable failure below. */ }
+  console.error('FFmpeg not found. Configure ffmpegPath or install FFmpeg.');
+  cachedFfmpegPath = null;
+  return cachedFfmpegPath;
 }
 
-/**
- * Detect the best available H.264 encoder for transcoding.
- * Priority: NVENC (NVIDIA) > QSV (Intel) > AMF (AMD) > libx264 (CPU).
- * Caches the result so we don't probe on every request.
- */
 let cachedEncoder = null;
 function detectEncoder() {
   if (cachedEncoder) return cachedEncoder;
-
   const ffmpegBin = resolveFfmpegPath();
   if (!ffmpegBin) {
     cachedEncoder = { type: 'cpu', args: ['-c:v', 'libx264', '-preset', 'superfast', '-crf', '23'] };
     return cachedEncoder;
   }
-
   try {
     const result = spawnSync(ffmpegBin, ['-hide_banner', '-encoders'], { encoding: 'utf-8' });
     const encoders = result.stdout || '';
-
     if (encoders.includes('h264_nvenc')) {
-      console.log('🚀 Detected hardware encoder: h264_nvenc (NVIDIA GPU)');
       cachedEncoder = { type: 'nvenc', args: ['-c:v', 'h264_nvenc', '-preset', 'p5', '-cq:v', '23', '-b:v', '0'] };
     } else if (encoders.includes('h264_qsv')) {
-      console.log('🚀 Detected hardware encoder: h264_qsv (Intel Quick Sync)');
       cachedEncoder = { type: 'qsv', args: ['-c:v', 'h264_qsv', '-global_quality', '23', '-b:v', '0'] };
     } else if (encoders.includes('h264_amf')) {
-      console.log('🚀 Detected hardware encoder: h264_amf (AMD GPU)');
-      cachedEncoder = { type: 'amf', args: ['-c:v', 'h264_amf', '-quality', 'balanced', '-quality', '23'] };
+      cachedEncoder = { type: 'amf', args: ['-c:v', 'h264_amf', '-quality', 'balanced', '-cq:v', '23'] };
     } else {
-      console.log('⚠️  No hardware encoder detected — falling back to libx264 (CPU)');
       cachedEncoder = { type: 'cpu', args: ['-c:v', 'libx264', '-preset', 'superfast', '-crf', '23'] };
     }
   } catch {
-    console.log('⚠️  Hardware encoder probe failed — falling back to libx264 (CPU)');
     cachedEncoder = { type: 'cpu', args: ['-c:v', 'libx264', '-preset', 'superfast', '-crf', '23'] };
   }
-
   return cachedEncoder;
 }
 
-/**
- * Quality profiles for transcoding. Each profile adjusts the encoder
- * settings and output resolution. The browser will use the selected
- * quality for playback — user can switch in the player settings menu.
- */
 const QUALITY_PROFILES = {
   high:   { label: '1080p', height: 1080, crf: { nvenc: 23, qsv: 23, amf: 23, cpu: 23 } },
   medium: { label: '720p',  height: 720,  crf: { nvenc: 24, qsv: 24, amf: 24, cpu: 24 } },
   low:    { label: '480p',  height: 480,  crf: { nvenc: 26, qsv: 26, amf: 26, cpu: 26 } },
-  auto:   { label: 'Auto',  height: 0,   crf: { nvenc: 24, qsv: 24, amf: 24, cpu: 24 } },
+  auto:   { label: 'Auto',  height: 0,    crf: { nvenc: 24, qsv: 24, amf: 24, cpu: 24 } },
 };
 
-/**
- * Build FFmpeg encoder args for a given quality profile.
- */
 function getEncoderArgs(quality) {
   const encoder = detectEncoder();
   const profile = QUALITY_PROFILES[quality] || QUALITY_PROFILES.auto;
   const crf = profile.crf[encoder.type] || 23;
-
   if (encoder.type === 'nvenc') {
     return ['-c:v', 'h264_nvenc', '-preset', 'p5', '-cq:v', String(crf), '-b:v', '0'];
   } else if (encoder.type === 'qsv') {
     return ['-c:v', 'h264_qsv', '-global_quality', String(crf), '-b:v', '0'];
   } else if (encoder.type === 'amf') {
-    return ['-c:v', 'h264_amf', '-quality', 'balanced', '-quality', String(crf)];
+    return ['-c:v', 'h264_amf', '-quality', 'balanced', '-cq:v', String(crf)];
   } else {
     return ['-c:v', 'libx264', '-preset', 'superfast', '-crf', String(crf)];
   }
 }
 
-// MIME types for video files
 const VIDEO_MIME_TYPES = {
   '.mp4': 'video/mp4',
   '.mkv': 'video/x-matroska',
@@ -174,455 +112,119 @@ const VIDEO_MIME_TYPES = {
   '.m4v': 'video/x-m4v'
 };
 
-// Allowed subtitle extensions
-const SUBTITLE_EXTENSIONS = ['.srt', '.vtt', '.ass', '.ssa'];
-
-// Extensions browsers can play natively in their container format
 const BROWSER_COMPATIBLE_EXTS = ['.mp4', '.webm', '.m4v'];
 
-/**
- * Determine whether a file extension is natively playable in the browser.
- * MKV files commonly contain H.264/H.265 video which browsers cannot
- * decode inside an MKV container — these need transcoding to MP4.
- */
 function needsTranscoding(ext) {
   return !BROWSER_COMPATIBLE_EXTS.includes(ext);
 }
 
-/**
- * Stream a video file through FFmpeg, transcoding to H.264 (8-bit) + AAC
- * in an MP4 container. Uses fragmented MP4 with empty moov for progressive
- * playback. Caches the result so repeat requests get full range/seek support.
- */
-function transcodeAndStream(req, res, videoPath, stat, quality) {
-  const ffmpegBin = resolveFfmpegPath();
-  if (!ffmpegBin) {
-    return res.status(500).json({ success: false, error: 'FFmpeg not available for transcoding. Set "ffmpegPath" in config.json or install FFmpeg.' });
-  }
-
-  const cachePath = getTranscodeCachePath(videoPath, stat, quality);
-
-  // Serve from cache if the transcoded file already exists
-  if (existsSync(cachePath)) {
-    const cacheStat = statSync(cachePath);
-    const {range} = req.headers;
-
-    if (range) {
-      const parts = range.replace(/bytes=/, '').split('-');
-      const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : cacheStat.size - 1;
-
-      if (start >= cacheStat.size || end >= cacheStat.size) {
-        res.status(416).set({ 'Content-Range': `bytes */${cacheStat.size}` });
-        return res.end();
-      }
-
-      const chunkSize = (end - start) + 1;
-      res.status(206).set({
-        'Content-Range': `bytes ${start}-${end}/${cacheStat.size}`,
-        'Accept-Ranges': 'bytes',
-        'Content-Length': chunkSize,
-        'Content-Type': 'video/mp4',
-        'Cache-Control': 'no-cache',
-      });
-      createReadStream(cachePath, { start, end }).pipe(res);
-    } else {
-      res.status(200).set({
-        'Content-Length': cacheStat.size,
-        'Content-Type': 'video/mp4',
-        'Accept-Ranges': 'bytes',
-        'Cache-Control': 'no-cache',
-      });
-      createReadStream(cachePath).pipe(res);
-    }
-    return;
-  }
-
-  const tmpPath = `${cachePath}.tmp`;
-
-  const profile = QUALITY_PROFILES[quality] || QUALITY_PROFILES.auto;
-  const encoder = detectEncoder();
-  const encoderArgs = getEncoderArgs(quality);
-  const scaleFilter = profile.height > 0
-    ? `scale=-2:${profile.height},format=yuv420p`
-    : `scale=-2:720,format=yuv420p`;
-
-  const args = [
-    '-i', videoPath,
-    '-map', '0:v:0',
-    '-map', '0:a:0',
-    '-map', '0:s?',
-    ...encoderArgs,
-    '-pix_fmt', 'yuv420p',
-    '-vf', scaleFilter,
-    '-c:a', 'aac',
-    '-b:a', '128k',
-    '-sn',
-    '-f', 'mp4',
-    '-movflags', 'frag_keyframe+empty_moov',
-    '-fflags', '+genpts',
-    'pipe:1'
-  ];
-
-  const ffmpeg = spawn(ffmpegBin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
-  const cacheWriteStream = createWriteStream(tmpPath);
-
-  // During on-the-fly transcoding we CANNOT honor Range requests (FFmpeg pipes
-  // from the beginning). Do NOT advertise Accept-Ranges so the browser won't
-  // send seeking requests that result in full restarts. Once cached, the
-  // cache-serve path above does handle Range properly.
-  res.status(200).set({
-    'Content-Type': 'video/mp4',
-    'Cache-Control': 'no-cache',
-  });
-
-  ffmpeg.stdout.on('data', (chunk) => {
-    cacheWriteStream.write(chunk);
-    if (!res.write(chunk)) {
-      ffmpeg.stdout.pause();
-    }
-  });
-
-  res.on('drain', () => {
-    ffmpeg.stdout.resume();
-  });
-
-  ffmpeg.stderr.on('data', (data) => {
-    console.log(`FFmpeg [${basename(videoPath)}]: ${data}`);
-  });
-
-  ffmpeg.on('error', (err) => {
-    console.error('FFmpeg spawn error:', err.message);
-    cacheWriteStream.destroy();
-    try { unlinkSync(tmpPath); } catch { /* ignore */ }
-    if (!res.headersSent) {
-      res.status(500).json({ success: false, error: 'Transcoding failed' });
-    } else {
-      res.end();
-    }
-  });
-
-  ffmpeg.on('close', (code) => {
-    cacheWriteStream.end();
-    res.end();
-    if (code === 0) {
-      try { renameSync(tmpPath, cachePath); } catch (err) { console.error('Failed to cache:', err.message); }
-      console.log(`✅ Cached transcoded: ${basename(videoPath)}`);
-    } else {
-      console.error(`FFmpeg exited with code ${code} for ${basename(videoPath)}`);
-      try { unlinkSync(tmpPath); } catch { /* ignore */ }
-    }
-  });
-
-  req.on('close', () => {
-    ffmpeg.kill();
-  });
-}
-
-/**
- * Validate and resolve file path from library index.
- * Supports direct anime folder files and season subfolder files.
- */
 async function resolveVideoPath(slug, season, file) {
-  const libraryPath = getLibraryPath();
-  
+  const libraryPath = await getLibraryPath();
   const title = await getTitleBySlug(slug, libraryPath);
-  if (!title) {
-    return { error: 'Title not found', status: 404 };
-  }
-  
+  if (!title) return { error: 'Title not found', status: 404 };
   const relPath = title.relFolderPath || title.folderName;
-  const titleDirPath = join(libraryPath, relPath);
-
-  // 1. Check directly in title folder
-  const directPath = join(titleDirPath, file);
-  if (existsSync(directPath)) {
-    return { videoPath: directPath, title, season, file, titleDirPath };
-  }
-
-  // 2. Check under specified season subfolder
+  let libraryRoot;
+  let titleDirPath;
+  try {
+    libraryRoot = realpathSync(resolve(libraryPath));
+    titleDirPath = realpathSync(resolve(libraryRoot, relPath));
+  } catch { return { error: 'Title folder not found', status: 404 }; }
+  const isInside = (root, candidate) => {
+    const rel = relative(root, candidate);
+    return rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+  };
+  if (!isInside(libraryRoot, titleDirPath)) return { error: 'Invalid title path', status: 400 };
+  if (!file || basename(file) !== file) return { error: 'Invalid media filename', status: 400 };
+  const candidates = [resolve(titleDirPath, file)];
   if (season && season !== 'undefined') {
-    const seasonPath = join(titleDirPath, season, file);
-    if (existsSync(seasonPath)) {
-      return { videoPath: seasonPath, title, season, file, titleDirPath };
-    }
+    if (basename(season) !== season) return { error: 'Invalid season path', status: 400 };
+    candidates.push(resolve(titleDirPath, season, file));
   }
-
-  // 3. Fallback: search all season folders
   if (title.seasons && title.seasons.length > 0) {
     for (const s of title.seasons) {
-      if (s.folderName) {
-        const p = join(titleDirPath, s.folderName, file);
-        if (existsSync(p)) {
-          return { videoPath: p, title, season: s.folderName, file, titleDirPath };
-        }
-      }
+      const seasonName = s.folderName || s.name;
+      if (seasonName && basename(seasonName) === seasonName) candidates.push(resolve(titleDirPath, seasonName, file));
     }
   }
-
+  for (const candidate of candidates) {
+    if (!isInside(titleDirPath, candidate) || !existsSync(candidate)) continue;
+    try {
+      const actualPath = realpathSync(candidate);
+      if (isInside(titleDirPath, actualPath) && statSync(actualPath).isFile()) return { videoPath: actualPath, title, season, file, titleDirPath };
+    } catch { /* Skip files removed during resolution. */ }
+  }
   return { error: `Media file ${file} not found on disk`, status: 404 };
 }
 
-/**
- * Resolve the directory where an episode lives on disk.
- */
-async function resolveEpisodeDir(slug, season, episodeFile) {
-  const libraryPath = getLibraryPath();
-  const title = await getTitleBySlug(slug, libraryPath);
-  if (!title) return { error: 'Title not found', status: 404 };
-
-  const relPath = title.relFolderPath || title.folderName;
-  const titleDirPath = join(libraryPath, relPath);
-
-  // Check season folder
-  if (season && season !== 'undefined') {
-    const seasonDir = join(titleDirPath, season);
-    if (existsSync(seasonDir) && existsSync(join(seasonDir, episodeFile))) {
-      return { episodeDir: seasonDir, titleDirPath, title };
-    }
-  }
-
-  // Search season subfolders
-  if (title.seasons) {
-    for (const s of title.seasons) {
-      if (s.folderName) {
-        const candidate = join(titleDirPath, s.folderName, episodeFile);
-        if (existsSync(candidate)) {
-          return { episodeDir: join(titleDirPath, s.folderName), titleDirPath, title };
-        }
-      }
-    }
-  }
-
-  // Fallback: root title folder
-  return { episodeDir: titleDirPath, titleDirPath, title };
-}
-
-// GET /api/stream/:slug/:season/:file
-// Streams video file with HTTP Range support
-router.get('/:slug/:season/:file', async (req, res) => {
-  const { slug, season, file } = req.params;
-  
-  const result = await resolveVideoPath(slug, season, file);
-  if (result.error) {
-    return res.status(result.status).json({ success: false, error: result.error });
-  }
-  
-  const { videoPath } = result;
-  
-  let stat;
+function probeDuration(videoPath) {
   try {
-    stat = statSync(videoPath);
-  } catch (err) {
-    return res.status(500).json({ success: false, error: 'Failed to stat video file' });
-  }
-  
-   const fileSize = stat.size;
-  const ext = extname(file).toLowerCase();
-  const mimeType = VIDEO_MIME_TYPES[ext] || 'application/octet-stream';
-  const {range} = req.headers;
-
-  // Quality selection (for transcoded formats)
-  const quality = req.query.quality || 'auto';
-
-  // Transcode browser-incompatible formats (e.g. MKV with H.264) to MP4
-  if (needsTranscoding(ext)) {
-    return transcodeAndStream(req, res, videoPath, stat, quality);
-  }
-  
-  if (range) {
-    const parts = range.replace(/bytes=/, '').split('-');
-    const start = parseInt(parts[0], 10);
-    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-    
-    if (start >= fileSize || end >= fileSize) {
-      res.status(416).set({ 'Content-Range': `bytes */${fileSize}` });
-      return res.end();
+    const stat = statSync(videoPath);
+    const cached = durationCache.get(videoPath);
+    if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs && cached.expiresAt > Date.now()) {
+      return Promise.resolve(cached.duration);
     }
-    
-    const chunkSize = (end - start) + 1;
-    res.status(206).set({
-      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-      'Accept-Ranges': 'bytes',
-      'Content-Length': chunkSize,
-      'Content-Type': mimeType,
-      'Cache-Control': 'public, max-age=0'
-    });
-    
-    const stream = createReadStream(videoPath, { start, end });
-    stream.pipe(res);
-    stream.on('error', () => res.end());
-    
-  } else {
-    res.status(200).set({
-      'Content-Length': fileSize,
-      'Content-Type': mimeType,
-      'Accept-Ranges': 'bytes',
-      'Cache-Control': 'public, max-age=0'
-    });
-    const stream = createReadStream(videoPath);
-    stream.pipe(res);
-    stream.on('error', () => res.end());
-  }
-});
-
-// GET /api/stream/:slug/:season/:episodeFile/subtitle
-// Returns list of subtitle files saved on disk for this episode
-router.get('/:slug/:season/:episodeFile/subtitle', async (req, res) => {
-  const { slug, season, episodeFile } = req.params;
-  const resolved = await resolveEpisodeDir(slug, season, episodeFile);
-  if (resolved.error) return res.status(resolved.status).json({ success: false, error: resolved.error });
-
-  const { episodeDir, titleDirPath } = resolved;
-  const episodeBase = parsePath(episodeFile).name;
-  const found = [];
-  const seen = new Set();
-
-  for (const dir of [episodeDir, titleDirPath]) {
-    if (!existsSync(dir)) continue;
-    for (const ext of SUBTITLE_EXTENSIONS) {
-      const candidate = join(dir, `${episodeBase}${ext}`);
-      if (existsSync(candidate) && !seen.has(candidate)) {
-        seen.add(candidate);
-        found.push({ fileName: `${episodeBase}${ext}`, ext });
-      }
-    }
-  }
-
-  res.json({ success: true, subtitles: found });
-});
-
-// POST /api/stream/:slug/:season/:episodeFile/subtitle
-// Upload a subtitle file (.srt/.vtt/.ass/.ssa).
-// Renames it to match the episode base name and saves it in the episode's folder.
-// Send raw file body with header X-Subtitle-Ext: .srt (or .vtt etc.)
-router.post('/:slug/:season/:episodeFile/subtitle', express.raw({ type: '*/*', limit: '20mb' }), async (req, res) => {
-  const { slug, season, episodeFile } = req.params;
-  const subExt = (req.headers['x-subtitle-ext'] || '.vtt').toLowerCase();
-
-  if (!SUBTITLE_EXTENSIONS.includes(subExt)) {
-    return res.status(400).json({ success: false, error: `Only ${SUBTITLE_EXTENSIONS.join(', ')} subtitle files are accepted` });
-  }
-
-  if (!req.body || !req.body.length) {
-    return res.status(400).json({ success: false, error: 'No subtitle data received' });
-  }
-
-  const resolved = await resolveEpisodeDir(slug, season, episodeFile);
-  if (resolved.error) return res.status(resolved.status).json({ success: false, error: resolved.error });
-
-  const { episodeDir } = resolved;
-  const episodeBase = parsePath(episodeFile).name;
-  const destFileName = `${episodeBase}${subExt}`;
-  const destPath = join(episodeDir, destFileName);
-
-  try {
-    writeFileSync(destPath, req.body);
-    console.log(`  Saved subtitle to: ${destPath}`);
-    res.json({ success: true, savedAs: destFileName });
-  } catch (err) {
-    console.error('Failed to save subtitle:', err.message);
-    res.status(500).json({ success: false, error: 'Failed to write subtitle file to disk' });
-  }
-});
-
-/**
- * Probe a video file for its duration using FFmpeg.
- * Returns duration in seconds (float), or 0 if it cannot be determined.
- */
-async function probeDuration(videoPath) {
+  } catch { return Promise.resolve(0); }
   const ffmpegBin = resolveFfmpegPath();
   if (!ffmpegBin) return 0;
-
   return new Promise((resolve) => {
-    // Use -t 1 to limit output to 1s; we only need the header info which
-    // FFmpeg prints immediately to stderr before processing frames.
-    const ffprobe = spawn(ffmpegBin, [
-      '-i', videoPath,
-      '-hide_banner',
-      '-t', '1',
-      '-f', 'null',
-      '-',
-    ], { stdio: ['ignore', 'ignore', 'pipe'] });
-
+    const ffprobe = spawn(ffmpegBin, ['-hide_banner', '-nostats', '-i', videoPath, '-t', '1', '-f', 'null', '-'], { stdio: ['ignore', 'ignore', 'pipe'] });
     let stderr = '';
     let settled = false;
-
-    const cleanup = () => {
-      if (!settled) {
-        settled = true;
-        ffprobe.kill();
-      }
-    };
-
-    ffprobe.stderr.on('data', (data) => {
-      stderr += data.toString();
-      // Duration appears in the header, before any frame processing
-      const m = stderr.match(/Duration:\s*(\d+):(\d+):(\d+)\.(\d+)/);
-      if (m) {
-        const h = parseInt(m[1], 10);
-        const min = parseInt(m[2], 10);
-        const s = parseInt(m[3], 10);
-        const ms = parseInt(m[4], 10);
-        cleanup();
-        resolve(h * 3600 + min * 60 + s + ms / 100);
-      }
-    });
-
-    ffprobe.on('close', () => {
-      if (settled) return;
-      settled = true;
-      // If we haven't resolved yet, try parsing what we have
-      const m = stderr.match(/Duration:\s*(\d+):(\d+):(\d+)\.(\d+)/);
-      if (m) {
-        const h = parseInt(m[1], 10);
-        const min = parseInt(m[2], 10);
-        const s = parseInt(m[3], 10);
-        const ms = parseInt(m[4], 10);
-        resolve(h * 3600 + min * 60 + s + ms / 100);
-      } else {
-        resolve(0);
-      }
-    });
-
-    ffprobe.on('error', () => {
-      if (!settled) {
-        settled = true;
-        resolve(0);
-      }
-    });
-
-    // Safety timeout — should never wait this long
-    setTimeout(() => {
+    const timeout = setTimeout(() => {
       if (!settled) {
         settled = true;
         ffprobe.kill();
         resolve(0);
       }
     }, 10000);
+    const cleanup = () => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timeout);
+        ffprobe.kill();
+      }
+    };
+    ffprobe.stderr.on('data', (data) => {
+      stderr += data.toString();
+      const m = stderr.match(/Duration:\s*(\d+):(\d+):(\d+)\.(\d+)/);
+      if (m) {
+        const h = parseInt(m[1], 10), min = parseInt(m[2], 10), s = parseInt(m[3], 10), ms = parseInt(m[4], 10);
+        cleanup();
+        const duration = h * 3600 + min * 60 + s + ms / 100;
+        const stat = statSync(videoPath);
+        if (durationCache.size > 500) durationCache.clear();
+        durationCache.set(videoPath, { duration, size: stat.size, mtimeMs: stat.mtimeMs, expiresAt: Date.now() + 60 * 60 * 1000 });
+        resolve(duration);
+      }
+    });
+    ffprobe.on('close', () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      const m = stderr.match(/Duration:\s*(\d+):(\d+):(\d+)\.(\d+)/);
+      if (m) {
+        const h = parseInt(m[1], 10), min = parseInt(m[2], 10), s = parseInt(m[3], 10), ms = parseInt(m[4], 10);
+        const duration = h * 3600 + min * 60 + s + ms / 100;
+        const stat = statSync(videoPath);
+        if (durationCache.size > 500) durationCache.clear();
+        durationCache.set(videoPath, { duration, size: stat.size, mtimeMs: stat.mtimeMs, expiresAt: Date.now() + 60 * 60 * 1000 });
+        resolve(duration);
+      } else { resolve(0); }
+    });
+    ffprobe.on('error', () => { if (!settled) { settled = true; clearTimeout(timeout); resolve(0); } });
   });
 }
 
-/**
- * Probe a video file for embedded subtitle tracks using FFmpeg.
- * Returns an array of { index, language, label } objects.
- */
-async function probeSubtitleTracks(videoPath) {
+function probeSubtitleTracks(videoPath) {
   const ffmpegBin = resolveFfmpegPath();
   if (!ffmpegBin) return [];
-
   return new Promise((resolve) => {
-    const ffmpeg = spawn(ffmpegBin, ['-i', videoPath, '-hide_banner'], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
+    const ffmpeg = spawn(ffmpegBin, ['-hide_banner', '-i', videoPath], { stdio: ['ignore', 'pipe', 'pipe'] });
     let stderr = '';
     ffmpeg.stderr.on('data', (data) => { stderr += data.toString(); });
-
     ffmpeg.on('close', (code) => {
       const tracks = [];
       const lines = stderr.split(/\r?\n/);
-
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         const match = line.match(/Stream #\d+:(\d+)\((\w+)\):\s+Subtitle:\s+(.+?)(?:\s+\(default\))?$/);
@@ -631,113 +233,210 @@ async function probeSubtitleTracks(videoPath) {
           const language = match[2];
           let label = match[3].split(',')[0].trim();
           let isDefault = !!line.match(/\(default\)/);
-
-          // Look for title metadata in the following lines
           for (let j = i + 1; j < Math.min(i + 10, lines.length); j++) {
             const titleMatch = lines[j].trim().match(/^title\s*:\s*(.+)$/);
-            if (titleMatch) {
-              label = titleMatch[1].trim();
-              break;
-            }
+            if (titleMatch) { label = titleMatch[1].trim(); break; }
             if (lines[j].includes('Stream #')) break;
           }
-
           tracks.push({ index, language, label, isDefault });
         }
       }
       resolve(tracks);
     });
-
     ffmpeg.on('error', () => resolve([]));
   });
 }
 
-// GET /api/stream/:slug/:season/:file/duration
-// Returns the original video duration (seconds) for seek-bar calculations.
-// This is needed for transcoded/streamed content where the browser cannot
-// determine the full duration until the entire stream is received.
-router.get('/:slug/:season/:file/duration', async (req, res) => {
+function classifyChapter(title) {
+  const value = title.toLowerCase();
+  if (/prologue|recap|previously|previous episode/.test(value)) return 'prologue';
+  if (/opening|intro|\bop\b/.test(value)) return 'opening';
+  if (/ending|outro|\bed\b|credits/.test(value)) return 'ending';
+  if (/episode|main|story|chapter\s*\d*/.test(value)) return 'episode';
+  return 'chapter';
+}
+
+function probeChapters(videoPath) {
+  const ffmpegBin = resolveFfmpegPath();
+  if (!ffmpegBin) return Promise.resolve([]);
+  return new Promise((resolve) => {
+    const ffmpeg = spawn(ffmpegBin, [
+      '-hide_banner', '-loglevel', 'error', '-i', videoPath,
+      '-map_metadata', '0', '-f', 'ffmetadata', 'pipe:1'
+    ], { stdio: ['ignore', 'pipe', 'ignore'] });
+    let output = '';
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      ffmpeg.kill();
+      resolve([]);
+    }, 10000);
+    ffmpeg.stdout.on('data', (chunk) => {
+      output += chunk.toString();
+      if (output.length > 1024 * 1024) {
+        ffmpeg.kill();
+        output = '';
+      }
+    });
+    ffmpeg.on('error', () => {
+      if (!settled) { settled = true; clearTimeout(timeout); resolve([]); }
+    });
+    ffmpeg.on('close', () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      const chapters = [];
+      let chapter = null;
+      for (const line of output.split(/\r?\n/)) {
+        if (line === '[CHAPTER]') {
+          if (chapter) chapters.push(chapter);
+          chapter = {};
+          continue;
+        }
+        const match = line.match(/^([A-Za-z0-9_]+)=(.*)$/);
+        if (match && chapter) chapter[match[1].toLowerCase()] = match[2].replace(/\\([\\#;=])/g, '$1');
+      }
+      if (chapter) chapters.push(chapter);
+      const parsed = chapters.map((item) => {
+        const [numerator, denominator] = (item.timebase || '').split('/').map(Number);
+        const scale = numerator > 0 && denominator > 0 ? numerator / denominator : 0;
+        const start = Number(item.start) * scale;
+        const end = Number(item.end) * scale;
+        const title = (item.title || item.name || 'Chapter').trim();
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+        return { title, type: classifyChapter(title), start: Math.max(0, start), end };
+      }).filter(Boolean).sort((a, b) => a.start - b.start);
+      resolve(parsed);
+    });
+  });
+}
+
+function parseRangeHeader(rangeHeader, fileSize) {
+  if (!rangeHeader) return { start: 0, end: fileSize - 1 };
+  const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader);
+  if (!match || (!match[1] && !match[2])) return null;
+  let start;
+  let end;
+  if (!match[1]) {
+    const suffixLength = Number(match[2]);
+    if (!suffixLength) return null;
+    start = Math.max(0, fileSize - suffixLength);
+    end = fileSize - 1;
+  } else {
+    start = Number(match[1]);
+    end = match[2] ? Number(match[2]) : fileSize - 1;
+  }
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || start >= fileSize) return null;
+  return { start, end: Math.min(end, fileSize - 1) };
+}
+
+router.get('/:slug/:season/:file', async (req, res) => {
   const { slug, season, file } = req.params;
   const result = await resolveVideoPath(slug, season, file);
   if (result.error) return res.status(result.status).json({ success: false, error: result.error });
 
+  const { videoPath } = result;
+  let stat;
+  try { stat = statSync(videoPath); } catch { return res.status(500).json({ success: false, error: 'Failed to stat video file' }); }
+
+  const fileSize = stat.size;
+  const ext = extname(file).toLowerCase();
+  const mimeType = VIDEO_MIME_TYPES[ext] || 'application/octet-stream';
+  const quality = req.query.quality || 'auto';
+
+  if (!needsTranscoding(ext)) {
+    const {range} = req.headers;
+    if (range) {
+      const parsedRange = parseRangeHeader(range, fileSize);
+      if (!parsedRange) return res.status(416).set({ 'Content-Range': `bytes */${fileSize}`, 'Accept-Ranges': 'bytes' }).end();
+      const { start, end } = parsedRange;
+      const chunkSize = (end - start) + 1;
+      res.status(206).set({
+        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges': 'bytes', 'Content-Length': chunkSize,
+        'Content-Type': mimeType, 'Cache-Control': 'public, max-age=0'
+      });
+  const stream = createReadStream(videoPath, { start, end });
+      stream.pipe(res);
+      stream.on('error', () => res.end());
+    } else {
+      res.status(200).set({ 'Content-Length': fileSize, 'Content-Type': mimeType, 'Accept-Ranges': 'bytes', 'Cache-Control': 'public, max-age=0' });
+      const stream = createReadStream(videoPath);
+      stream.pipe(res);
+      stream.on('error', () => res.end());
+    }
+    return;
+  }
+
+  const playlistUrl = `/api/stream/${encodeURIComponent(slug)}/${encodeURIComponent(season)}/${encodeURIComponent(file)}/hls/${encodeURIComponent(quality)}`;
+  return res.redirect(307, playlistUrl);
+});
+
+router.get('/:slug/:season/:file/duration', async (req, res) => {
+  const { slug, season, file } = req.params;
+  const result = await resolveVideoPath(slug, season, file);
+  if (result.error) return res.status(result.status).json({ success: false, error: result.error });
   const { videoPath } = result;
   const dur = await probeDuration(videoPath);
   res.json({ success: true, duration: dur });
 });
 
-// GET /api/stream/:slug/:season/:file/embedded-subs
-// Returns list of embedded subtitle tracks in the video file
+router.get('/:slug/:season/:file/chapters', async (req, res) => {
+  const { slug, season, file } = req.params;
+  const result = await resolveVideoPath(slug, season, file);
+  if (result.error) return res.status(result.status).json({ success: false, error: result.error });
+  const stat = statSync(result.videoPath);
+  const cached = chapterCache.get(result.videoPath);
+  let chapters;
+  if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) {
+    chapters = cached.chapters;
+  } else {
+    chapters = await probeChapters(result.videoPath);
+    if (chapterCache.size > 500) chapterCache.clear();
+    chapterCache.set(result.videoPath, { size: stat.size, mtimeMs: stat.mtimeMs, chapters });
+  }
+  res.json({ success: true, chapters });
+});
+
 router.get('/:slug/:season/:file/embedded-subs', async (req, res) => {
   const { slug, season, file } = req.params;
   const result = await resolveVideoPath(slug, season, file);
   if (result.error) return res.status(result.status).json({ success: false, error: result.error });
-
   const { videoPath } = result;
   const tracks = await probeSubtitleTracks(videoPath);
   res.json({ success: true, tracks });
 });
 
-// GET /api/stream/:slug/:season/:file/embedded-subs/:trackIndex
-// Serves a single embedded subtitle track as raw ASS (.ass) for client-side
-// rendering via SubtitlesOctopus (libass-wasm). Preserves all ASS features
-// including \pos, \move, \an, colors, fonts, and karaoke effects.
-// Note: Content-Type is vtt so the HTML <track> element accepts it, but the
-// content is actually ASS which SubtitlesOctopus will parse directly.
 router.get('/:slug/:season/:file/embedded-subs/:trackIndex', async (req, res) => {
   const { slug, season, file, trackIndex } = req.params;
+  if (!/^\d+$/.test(trackIndex) || !Number.isSafeInteger(Number(trackIndex))) {
+    return res.status(400).json({ success: false, error: 'Invalid subtitle track index' });
+  }
   const result = await resolveVideoPath(slug, season, file);
   if (result.error) return res.status(result.status).json({ success: false, error: result.error });
-
   const { videoPath } = result;
   const ffmpegBin = resolveFfmpegPath();
-  if (!ffmpegBin) {
-    return res.status(500).json({ success: false, error: 'FFmpeg not available for subtitle extraction.' });
-  }
-
+  if (!ffmpegBin) return res.status(500).json({ success: false, error: 'FFmpeg not available' });
   res.set({ 'Content-Type': 'text/vtt; charset=utf-8' });
-
-  const ffmpeg = spawn(ffmpegBin, [
-    '-i', videoPath,
-    '-map', `0:${trackIndex}`,
-    '-c:s', 'ass',
-    '-f', 'ass',
-    'pipe:1'
-  ], { stdio: ['ignore', 'pipe', 'pipe'] });
-
+  const ffmpeg = spawn(ffmpegBin, ['-i', videoPath, '-map', `0:${trackIndex}`, '-c:s', 'ass', '-f', 'ass', 'pipe:1'], { stdio: ['ignore', 'pipe', 'pipe'] });
   ffmpeg.stdout.pipe(res);
-
   ffmpeg.stderr.on('data', () => {});
   ffmpeg.on('error', () => res.end());
-  ffmpeg.on('close', (code) => {
-    res.end();
-    if (code !== 0) console.error(`FFmpeg subtitle extraction exited with code ${code}`);
+  ffmpeg.on('close', (code) => { res.end(); if (code !== 0) console.error(`Subtitle extraction exited with code ${code}`); });
+  res.on('close', () => {
+    if (!res.writableEnded) ffmpeg.kill();
   });
-
-  req.on('close', () => ffmpeg.kill());
 });
 
-// GET /api/stream/:slug/:season/:file/embedded-fonts
-// Returns list of embedded fonts (MKV attachments) as base64 data URLs for
-// use with SubtitlesOctopus/libass. Needed for ASS subtitles that reference
-// specific fonts (e.g., Japanese fonts for signs).
 router.get('/:slug/:season/:file/embedded-fonts', async (req, res) => {
   const { slug, season, file } = req.params;
   const result = await resolveVideoPath(slug, season, file);
   if (result.error) return res.status(result.status).json({ success: false, error: result.error });
-
   const { videoPath } = result;
   const ffmpegBin = resolveFfmpegPath();
-  if (!ffmpegBin) {
-    return res.status(500).json({ success: false, error: 'FFmpeg not available for font extraction.' });
-  }
-
-  // Probe for attachment streams (fonts) using stderr
-  const probe = spawnSync(ffmpegBin, [
-    '-i', videoPath,
-    '-hide_banner',
-  ], { encoding: 'utf-8' });
-
+  if (!ffmpegBin) return res.status(500).json({ success: false, error: 'FFmpeg not available' });
+  const probe = spawnSync(ffmpegBin, ['-i', videoPath, '-hide_banner'], { encoding: 'utf-8' });
   const fonts = [];
   const stderr = probe.stderr || '';
   const lines = stderr.split(/\r?\n/);
@@ -747,42 +446,253 @@ router.get('/:slug/:season/:file/embedded-fonts', async (req, res) => {
       const idx = parseInt(attMatch[1], 10);
       for (let j = i + 1; j < Math.min(i + 4, lines.length); j++) {
         const fn = lines[j].match(/filename\s*:\s*(.+)/);
-        if (fn) {
-          fonts.push({ index: idx, filename: fn[1].trim() });
-          break;
-        }
+        if (fn) { fonts.push({ index: idx, filename: fn[1].trim() }); break; }
       }
     }
   }
-
-  if (fonts.length === 0) {
-    return res.json({ success: true, fonts: [] });
-  }
-
-  // Extract each font as base64 data URL
+  if (fonts.length === 0) return res.json({ success: true, fonts: [] });
   const results = [];
   for (const font of fonts) {
     try {
-      const ff = spawnSync(ffmpegBin, [
-        '-i', videoPath,
-        '-map', `0:${font.index}`,
-        '-f', 'data',
-        'pipe:1'
-      ], { encoding: null });  // binary mode
-
+      const ff = spawnSync(ffmpegBin, ['-i', videoPath, '-map', `0:${font.index}`, '-f', 'data', 'pipe:1'], { encoding: null });
       if (ff.status === 0 && ff.stdout) {
         const base64 = ff.stdout.toString('base64');
-        results.push({
-          filename: font.filename,
-          dataUrl: `data:application/octet-stream;base64,${base64}`
-        });
+        results.push({ filename: font.filename, dataUrl: `data:application/octet-stream;base64,${base64}` });
       }
-    } catch (err) {
-      console.warn(`Failed to extract font ${font.filename}:`, err.message);
-    }
+    } catch (err) { console.warn(`Failed to extract font ${font.filename}:`, err.message); }
   }
-
   res.json({ success: true, fonts: results });
 });
+
+router.get('/:slug/:season/:file/subtitle', async (req, res) => {
+  const { slug, season, file } = req.params;
+  const result = await resolveVideoPath(slug, season, file);
+  if (result.error) return res.status(result.status).json({ success: false, error: result.error });
+  const episodeBase = parsePath(basename(file)).name;
+  const found = [];
+  const directory = dirname(result.videoPath);
+  for (const ext of ['.srt', '.vtt', '.ass', '.ssa']) {
+    const candidate = join(directory, `${episodeBase}${ext}`);
+    if (existsSync(candidate)) found.push({ fileName: `${episodeBase}${ext}`, ext });
+  }
+  res.json({ success: true, subtitles: found });
+});
+
+router.post('/:slug/:season/:file/subtitle', express.raw({ type: '*/*', limit: '20mb' }), async (req, res) => {
+  const { slug, season, file } = req.params;
+  const result = await resolveVideoPath(slug, season, file);
+  if (result.error) return res.status(result.status).json({ success: false, error: result.error });
+  const subExt = (req.headers['x-subtitle-ext'] || '.vtt').toLowerCase();
+  if (!['.srt', '.vtt', '.ass', '.ssa'].includes(subExt)) return res.status(400).json({ success: false, error: `Only .srt, .vtt, .ass and .ssa files accepted` });
+  if (!req.body || !req.body.length) return res.status(400).json({ success: false, error: 'No subtitle data received' });
+  const episodeBase = parsePath(basename(file)).name;
+  const destPath = join(dirname(result.videoPath), `${episodeBase}${subExt}`);
+  try { writeFileSync(destPath, req.body); res.json({ success: true, savedAs: `${episodeBase}${subExt}` }); }
+  catch (err) { console.error('Failed to save subtitle:', err.message); res.status(500).json({ success: false, error: 'Failed to write subtitle file' }); }
+});
+
+// HLS Playlist endpoint
+// GET /:slug/:season/:file/hls/:quality - Returns M3U8 playlist
+router.get('/:slug/:season/:file/hls/:quality', async (req, res) => {
+  const { slug, season, file, quality } = req.params;
+  if (!Object.hasOwn(QUALITY_PROFILES, quality)) return res.status(400).json({ success: false, error: 'Invalid quality profile' });
+  const result = await resolveVideoPath(slug, season, file);
+  if (result.error) return res.status(result.status).json({ success: false, error: result.error });
+  const { videoPath } = result;
+
+  const duration = await probeDuration(videoPath);
+  if (duration <= 0) return res.status(500).json({ success: false, error: 'Could not determine video duration' });
+
+  const segmentCount = Math.ceil(duration / SEGMENT_DURATION);
+  let playlist = '#EXTM3U\n';
+  playlist += '#EXT-X-VERSION:6\n';
+  playlist += `#EXT-X-TARGETDURATION:${SEGMENT_DURATION}\n`;
+  playlist += '#EXT-X-MEDIA-SEQUENCE:0\n';
+  playlist += '#EXT-X-PLAYLIST-TYPE:VOD\n';
+  playlist += '#EXT-X-INDEPENDENT-SEGMENTS\n';
+
+  for (let i = 0; i < segmentCount; i++) {
+    const segmentDuration = i === segmentCount - 1 ? (duration - i * SEGMENT_DURATION) : SEGMENT_DURATION;
+    const segUrl = `/api/stream/${encodeURIComponent(slug)}/${encodeURIComponent(season)}/${encodeURIComponent(file)}/hls/${quality}/segment/${i}`;
+    playlist += `#EXTINF:${segmentDuration.toFixed(3)},\n`;
+    playlist += `${segUrl}\n`;
+  }
+
+  playlist += '#EXT-X-ENDLIST\n';
+
+  res.set({ 'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-cache' });
+  res.send(playlist);
+});
+
+// HLS Segment endpoint
+// GET /:slug/:season/:file/hls/:quality/segment/:index - Returns MPEG-TS segment
+router.get('/:slug/:season/:file/hls/:quality/segment/:index', async (req, res) => {
+  const { slug, season, file, quality, index } = req.params;
+  if (!Object.hasOwn(QUALITY_PROFILES, quality)) return res.status(400).json({ success: false, error: 'Invalid quality profile' });
+  const segmentIndex = parseInt(index, 10);
+  if (isNaN(segmentIndex) || segmentIndex < 0) {
+    return res.status(400).json({ success: false, error: 'Invalid segment index' });
+  }
+
+  const result = await resolveVideoPath(slug, season, file);
+  if (result.error) return res.status(result.status).json({ success: false, error: result.error });
+  const { videoPath } = result;
+
+  const duration = await probeDuration(videoPath);
+  const maxSegments = Math.ceil(duration / SEGMENT_DURATION);
+  if (segmentIndex >= maxSegments) {
+    return res.status(404).json({ success: false, error: 'Segment index out of range' });
+  }
+
+  const startTime = segmentIndex * SEGMENT_DURATION;
+  const libraryPath = await getLibraryPath();
+  const segmentId = generateSegmentId(videoPath, startTime, quality);
+  const cacheDir = getCacheDir(libraryPath);
+  const cachePath = join(cacheDir, `${segmentId}.ts`);
+  const tempPath = `${cachePath}.tmp`;
+
+  if (existsSync(cachePath)) {
+    accessSegment(segmentId);
+    return serveHlsSegment(req, res, cachePath, segmentId);
+  }
+
+  if (isGenerating(segmentId)) {
+    return waitForHlsSegment(segmentId, req, res, cachePath);
+  }
+
+  startGeneration(segmentId);
+
+  const ffmpegBin = resolveFfmpegPath();
+  if (!ffmpegBin) {
+    finishGeneration(segmentId);
+    return res.status(500).json({ success: false, error: 'FFmpeg not available' });
+  }
+
+  const encoderArgs = getEncoderArgs(quality);
+  const maxHeight = (QUALITY_PROFILES[quality] || QUALITY_PROFILES.auto).height || 720;
+  const scaleFilter = `scale=-2:min(ih\\,${maxHeight}),format=yuv420p`;
+
+  const args = [
+    '-ss', String(startTime),
+    '-hide_banner', '-loglevel', 'error', '-nostats',
+    '-i', videoPath,
+    '-map', '0:v:0',
+    '-map', '0:a:0?',
+    ...encoderArgs,
+    '-pix_fmt', 'yuv420p',
+    '-vf', scaleFilter,
+    '-c:a', 'aac',
+    '-b:a', '128k',
+    '-sn',
+    '-g', '240',
+    '-f', 'mpegts',
+    '-flush_packets', '1',
+    '-t', String(SEGMENT_DURATION),
+    tempPath
+  ];
+
+  if (!existsSync(cacheDir)) {
+    mkdirSync(cacheDir, { recursive: true });
+  }
+
+  const ffmpeg = spawn(ffmpegBin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+
+  ffmpeg.stderr.on('data', (data) => {
+    const message = data.toString().trim();
+    if (message) console.error(`FFmpeg HLS segment error at ${Math.floor(startTime)}s: ${message.slice(0, 1500)}`);
+  });
+
+  ffmpeg.on('error', (err) => {
+    console.error('FFmpeg HLS spawn error:', err.message);
+    finishGeneration(segmentId);
+    try { unlinkSync(tempPath); } catch { }
+    if (!res.headersSent) { res.status(500).json({ success: false, error: 'HLS transcoding failed' }); } else { res.end(); }
+  });
+
+  ffmpeg.on('close', (code) => {
+    finishGeneration(segmentId);
+    if (code === 0 && existsSync(tempPath)) {
+      try { renameSync(tempPath, cachePath); } catch (err) {
+        console.error('Could not finalize HLS segment cache:', err.message);
+        try { unlinkSync(tempPath); } catch { }
+      }
+    }
+    if (code === 0 && existsSync(cachePath)) {
+      addToCache(segmentId, {
+        path: cachePath,
+        size: statSync(cachePath).size,
+        sourceInfo: { videoPath, startTime, quality }
+      });
+      updateAllPriorities();
+      if (!res.destroyed) {
+        serveHlsSegment(req, res, cachePath, segmentId);
+      }
+      enforceSizeLimit().catch(() => {});
+    } else {
+      console.error(`FFmpeg HLS exited with code ${code} for segment at ${startTime}s`);
+      try { unlinkSync(tempPath); } catch { }
+      if (!res.headersSent) { res.status(500).json({ success: false, error: 'HLS transcoding failed' }); } else { res.end(); }
+    }
+  });
+
+});
+
+function serveHlsSegment(req, res, filePath, segmentId) {
+  beginSegmentUse(segmentId);
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    endSegmentUse(segmentId);
+  };
+  res.once('finish', release);
+  res.once('close', release);
+  const stat = statSync(filePath);
+  const fileSize = stat.size;
+  const range = req.headers.range;
+
+  if (range) {
+    const parsedRange = parseRangeHeader(range, fileSize);
+    if (!parsedRange) {
+      res.status(416).set({ 'Content-Range': `bytes */${fileSize}`, 'Accept-Ranges': 'bytes', 'Content-Type': 'video/mp2t' });
+      return res.end();
+    }
+    const { start, end: clampedEnd } = parsedRange;
+    const chunkSize = (clampedEnd - start) + 1;
+    res.status(206).set({
+      'Content-Range': `bytes ${start}-${clampedEnd}/${fileSize}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': chunkSize,
+      'Content-Type': 'video/mp2t',
+      'Cache-Control': 'no-cache',
+    });
+    createReadStream(filePath, { start, end: clampedEnd }).pipe(res);
+  } else {
+    res.status(200).set({
+      'Content-Length': fileSize,
+      'Content-Type': 'video/mp2t',
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'no-cache',
+    });
+    createReadStream(filePath).pipe(res);
+  }
+}
+
+function waitForHlsSegment(segmentId, req, res, cachePath) {
+  let attempts = 0;
+  const maxAttempts = 300;
+  const interval = setInterval(() => {
+    attempts++;
+    if (existsSync(cachePath)) {
+      clearInterval(interval);
+      accessSegment(segmentId);
+      if (!res.destroyed) serveHlsSegment(req, res, cachePath, segmentId);
+    } else if (attempts >= maxAttempts || !isGenerating(segmentId)) {
+      clearInterval(interval);
+      if (!res.destroyed && !res.headersSent) { res.status(500).json({ success: false, error: 'HLS segment generation failed' }); }
+    }
+  }, 200);
+  req.on('close', () => clearInterval(interval));
+}
 
 export default router;

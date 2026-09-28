@@ -1,10 +1,10 @@
 import express from 'express';
-import cors from 'cors';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { initDatabase } from './db/init.js';
 import { scanLibrary } from './services/scanner.js';
+import { initializeCache } from './services/cacheManager.js';
 import libraryRouter from './routes/library.js';
 import streamRouter from './routes/stream.js';
 import progressRouter from './routes/progress.js';
@@ -55,6 +55,10 @@ initDatabase(fullLibraryPath);
 console.log('📚 Starting initial library scan...\n');
 await scanLibrary(fullLibraryPath);
 
+// Initialize cache
+console.log('💾 Initializing cache...');
+await initializeCache();
+
 // Create Express app
 const app = express();
 
@@ -66,7 +70,6 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(cors());
 app.use(express.json());
 
 // API routes

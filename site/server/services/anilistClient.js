@@ -1,5 +1,4 @@
 // AniList GraphQL client strictly scoped to configured user account
-import { writeFileSync } from 'fs';
 import https from 'https';
 import { getDatabase } from '../db/init.js';
 

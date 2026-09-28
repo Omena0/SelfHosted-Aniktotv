@@ -40,17 +40,22 @@ function renderInlineMarkdown(text: string): React.ReactNode[] {
     } else if (matchedStr.startsWith('[') && matchedStr.includes('](')) {
       const linkMatch = matchedStr.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
       if (linkMatch) {
-        parts.push(
-          <a
-            key={keyIdx++}
-            href={linkMatch[2]}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-[#209cee] underline hover:text-[#3caedc] transition-colors"
-          >
-            {linkMatch[1]}
-          </a>
-        );
+        const href = linkMatch[2].trim();
+        if (/^(https?:\/\/|mailto:|\/(?!\/)|#)/i.test(href)) {
+          parts.push(
+            <a
+              key={keyIdx++}
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[#209cee] underline hover:text-[#3caedc] transition-colors"
+            >
+              {linkMatch[1]}
+            </a>
+          );
+        } else {
+          parts.push(matchedStr);
+        }
       } else {
         parts.push(matchedStr);
       }

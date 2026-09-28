@@ -37,7 +37,7 @@ Stream your local anime collection through a polished web interface, sync with y
 
 ## Features
 
-- **Local Streaming** - Stream `.mp4`, `.mkv`, `.webm`, `.avi`, `.mov` files directly from your hard drive via HTTP Range requests
+- **Local Streaming** - Play browser-compatible files directly and transcode other formats through on-demand HLS segments
 - ** Mobile Access** - Access from any device on your local network (phone, tablet, laptop)
 - **AniList Integration** - Automatically fetches metadata, posters, genres and synopsis from AniList for every anime in your library
 - **Watch Progress Tracking** - Saves your position per episode; resume exactly where you left off
@@ -46,7 +46,7 @@ Stream your local anime collection through a polished web interface, sync with y
 - **AniList Library Sync** - Browse your full AniList library (Watching, Completed, Planning, Paused, Dropped) alongside your local files
 - **Top Anime Sidebar** - Displays your highest-scored anime from AniList
 - **Airing Schedule** - Shows upcoming episodes for anime you are currently watching on AniList
-- **Custom Video Player** - Built-in player with seek preview thumbnails, playback speed control, Picture-in-Picture, double-tap fullscreen (auto-rotates on mobile), and subtitle support
+- **Custom Video Player** - Built-in player with chapter markers from embedded media metadata, optional opening/recap/ending auto-skip, seek previews, playback speed control, video-only double-click fullscreen, Picture-in-Picture, and subtitle support
 - **Local Status Categories** - Organize local files into `watching`, `planned`, and `finished` folders; the UI reflects these statuses automatically
 - **Library Rescan** - Refresh your library at any time with the Rescan button without restarting the server
 

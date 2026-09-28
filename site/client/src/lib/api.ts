@@ -77,8 +77,13 @@ export const api = {
    * Quality is only relevant for formats that need transcoding (MKV etc.).
    */
   getStreamUrl: (slug: string, season: string, file: string, quality?: string): string => {
-    const url = `/api/stream/${encodeURIComponent(slug)}/${encodeURIComponent(season)}/${encodeURIComponent(file)}`;
-    return quality ? `${url}?quality=${encodeURIComponent(quality)}` : url;
+    const qualityParam = quality || 'auto';
+    const ext = file.slice(file.lastIndexOf('.')).toLowerCase();
+    const isNative = ['.mp4', '.webm', '.m4v'].includes(ext);
+    if (isNative) {
+      return `/api/stream/${encodeURIComponent(slug)}/${encodeURIComponent(season)}/${encodeURIComponent(file)}`;
+    }
+    return `/api/stream/${encodeURIComponent(slug)}/${encodeURIComponent(season)}/${encodeURIComponent(file)}/hls/${encodeURIComponent(qualityParam)}`;
   },
 
   /**
@@ -148,6 +153,13 @@ export const api = {
       `/api/stream/${encodeURIComponent(slug)}/${encodeURIComponent(season)}/${encodeURIComponent(episodeFile)}/duration`
     );
     return response.duration || 0;
+  },
+
+  getVideoChapters: async (slug: string, season: string, episodeFile: string): Promise<Array<{ title: string; type: string; start: number; end: number }>> => {
+    const response = await fetchJson<{ success: boolean; chapters: Array<{ title: string; type: string; start: number; end: number }> }>(
+      `/api/stream/${encodeURIComponent(slug)}/${encodeURIComponent(season)}/${encodeURIComponent(episodeFile)}/chapters`
+    );
+    return response.chapters || [];
   },
 
   /**
